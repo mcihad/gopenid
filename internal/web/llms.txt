@@ -1,0 +1,102 @@
+# gOpenID
+
+> Merkezi kimlik ve yetkilendirme sunucusu (OpenID Connect 1.0 / OAuth 2.0 sağlayıcısı).
+> Dış uygulamalar buradan SSO ile kullanıcı doğrular; yöneticiler kullanıcı, grup,
+> rol, client, giriş politikası ve denetim kayıtlarını REST API ile yönetir.
+> Tüm token'lar RS256 JWT'dir, JWKS ile doğrulanır. Yanıtlar JSON; hata biçimi: {"error":"mesaj"}.
+> Kimlik doğrulama: Authorization: Bearer <access_token>. Base URL örnek: http://localhost:8080 (issuer).
+
+## Kavramlar
+- User: email + parola ile giriş yapan kişi. Alanlar: email, name, title, phone, avatarUrl, active, blocked, departmentId, departments[], groups[], roles[], authorizedClients[], clientRoles[].
+- Client (uygulama): bir OIDC istemcisi. Alanlar: clientId, clientSecret, name, description, homeUrl, logoUrl, redirectUris (virgülle ayrılır), tokenTtlSeconds, refreshTtlSeconds, roles[] (client rolleri).
+- Erişim kontrolü: Bir kullanıcı bir client'a giriş yapabilmek için o client için "yetkili" (authorizedClients) olmalıdır. Aksi halde 403.
+- Role: sistem geneli rol. ClientRole: belirli bir client'a özgü rol.
+- Group: kullanıcı grubu; bir kullanıcı birden çok gruba üye olabilir.
+- Policy (giriş politikası): type=ip|time, effect=allow|deny. Atama hedefi subjectType=client|group|user. Hiyerarşi: user > group > client (en özgül seviye kazanır). allow varsa eşleşme şart; deny varsa eşleşme reddeder.
+- Token'lar: access_token (kısa ömür, JWT), refresh_token (opak, rotasyonlu), id_token (openid scope ile). jti ile iptal (revocation) desteklenir; logout tüm refresh token'ları iptal eder.
+
+## Token claim'leri (access/id token JWT payload)
+iss, sub (=email), aud (=clientId ya da "gopenid"), iat, exp, jti, email, name, uid (kullanıcı id), roles[], token_use ("access"|"id"), scope, department, nonce, resource_access ({clientId:{roles:[...]}}), client_roles[] (yalnızca istenen client için).
+- Scope'lar: openid, profile, email, roles, client_roles, offline_access. client_roles scope'u resource_access/client_roles claim'lerini ekler.
+
+## OIDC / OAuth2 uç noktaları (dış uygulamalar için)
+
+### Discovery & anahtarlar
+- GET /.well-known/openid-configuration → issuer, *_endpoint, desteklenen grant/scope/alg listeleri.
+- GET /.well-known/jwks.json (veya GET /oauth/jwks) → RS256 public key seti. Token imzasını burada doğrulayın.
+
+### Authorization Code Flow (PKCE destekli) — tarayıcı tabanlı uygulamalar için önerilir
+1. Kullanıcıyı şuraya yönlendir:
+   GET /oauth/authorize?response_type=code&client_id=CID&redirect_uri=URI&scope=openid%20profile%20email&state=S&nonce=N&code_challenge=CC&code_challenge_method=S256
+   - redirect_uri client'ın redirectUris listesinde olmalı. scope "openid" içermeli.
+   - Markalı giriş sayfası gösterilir (client adı/logosu + politika/yetki mesajları). Politika/yetki engeli varsa kullanıcıya neden gösterilir.
+2. Başarılı girişte URI'ye dönülür: {redirect_uri}?code=AUTH_CODE&state=S
+3. Kodu token'a çevir:
+   POST /oauth/token  (Content-Type: application/x-www-form-urlencoded)
+   grant_type=authorization_code&code=AUTH_CODE&redirect_uri=URI&client_id=CID&client_secret=SECRET&code_verifier=VERIFIER
+   → {access_token, id_token, refresh_token, token_type:"Bearer", expires_in, scope}
+   - PKCE: code_challenge_method=S256 ise code_verifier'ın SHA-256/base64url'i code_challenge'a eşit olmalı. "plain" de desteklenir.
+
+### Diğer grant'lar — POST /oauth/token (form-encoded)
+- Refresh: grant_type=refresh_token&refresh_token=RT[&client_id=CID&client_secret=SECRET] → yeni token seti (refresh rotasyonu yapılır, eski RT geçersiz olur).
+- Password (yalnızca güvenilir 1. taraf): grant_type=password&username=E&password=P&client_id=CID&client_secret=SECRET&scope=openid... → token seti. Kullanıcı client'a yetkili değilse 403; politika engeli varsa 403.
+- Client kimlik doğrulama: client_secret_post (gövdede client_id/client_secret) veya client_secret_basic (Authorization: Basic base64(id:secret)).
+
+### Kullanıcı bilgisi
+- GET /oauth/userinfo (Authorization: Bearer <access_token>) → {sub, email, name, roles, department, client_roles, resource_access}.
+
+### Token doğrulama (kaynak sunucular için)
+- JWKS'ten public key alıp imzayı RS256 ile doğrulayın; iss ve exp kontrol edin. İptal kontrolü gerekiyorsa /oauth/userinfo çağrısı iptal edilmiş token'ı 401 ile reddeder (sunucu jti blacklist tutar).
+
+## Birinci taraf (first-party) auth API — kendi SPA/mobil uygulamanız için
+- POST /api/auth/login  Body: {"email","password"} → {access_token, refresh_token, token_type, expires_in, user:{id,email,name,title,roles[]}}. Pasif/engelli/yanlış parola → 401 (Türkçe mesaj).
+- POST /api/auth/refresh  Body: {"refresh_token"} → yeni token seti (rotasyonlu). 401 if geçersiz/expired/revoked.
+- POST /api/auth/logout  (Bearer) → access token'ı iptal eder + kullanıcının tüm refresh token'larını geçersiz kılar.
+
+## Self-service API — /api/me (Authorization: Bearer zorunlu)
+- GET  /api/me → tam profil (departments, groups, roles, authorizedClients, clientRoles dahil).
+- PUT  /api/me  Body: {name, phone, title, avatarUrl} → güncellenmiş profil.
+- POST /api/me/password  Body: {currentPassword, newPassword(min 8)} → parola değişir, mevcut tüm oturumlar iptal edilir.
+- GET  /api/me/roles | /departments | /groups | /clients | /sessions → ilgili listeler. /sessions aktif refresh token oturumlarıdır.
+
+## Admin API — /api/admin (Authorization: Bearer zorunlu)
+> CRUD deseni: GET liste, POST oluştur (201), GET /:id, PUT /:id, DELETE /:id (204). Id'ler JSON'da "ID" alanıdır (büyük harf).
+
+### Departmanlar  /api/admin/departments
+Body: {name, description}.
+
+### Sistem rolleri  /api/admin/roles
+Body: {name, description}.
+
+### Gruplar  /api/admin/groups
+Body: {name, description}.
+
+### Kullanıcılar  /api/admin/users
+- POST/PUT Body: {email, name, password (POST'ta zorunlu; PUT'ta boşsa değişmez), active, blocked, blockedReason, phone, title, avatarUrl, departmentId, roleIds[], clientIds[], clientRoleIds[], departmentIds[], groupIds[]}.
+  - clientIds[]: kullanıcının giriş yetkili olduğu client id'leri. clientRoleIds[]: atanan client rolleri.
+- POST /api/admin/users/:id/block   Body: {reason} → engeller + oturumları iptal eder.
+- POST /api/admin/users/:id/unblock → engeli kaldırır.
+- POST /api/admin/users/:id/revoke-sessions → kullanıcının tüm refresh token'larını iptal eder.
+
+### Client'lar (OIDC uygulamaları)  /api/admin/clients
+- Body: {clientId, clientSecret, name, description, homeUrl, logoUrl, redirectUris (virgülle ayrılmış), tokenTtlSeconds, refreshTtlSeconds}.
+  - tokenTtlSeconds/refreshTtlSeconds = 0 → sunucu varsayılanı kullanılır.
+- Client rolleri: GET/POST /api/admin/clients/:id/roles ; PUT/DELETE /api/admin/clients/:id/roles/:roleId. Body: {name, description}.
+
+### Giriş politikaları  /api/admin/policies
+- Body: {name, description, type:"ip"|"time", effect:"allow"|"deny", ipCidrs ("10.0.0.0/24, 1.2.3.4" — ip tipinde zorunlu), daysOfWeek ([0..6], 0=Pazar; boş=her gün), startTime ("HH:MM"), endTime ("HH:MM")}. Gece aşan aralık desteklenir (örn 22:00–06:00).
+- Atamalar: GET /api/admin/policies/:id/assignments ; POST aynı yol Body: {subjectType:"client"|"group"|"user", subjectId} (201) ; DELETE /api/admin/policies/:id/assignments/:assignmentId.
+- Değerlendirme: client-seviyesi politikalar giriş sayfasında doğrulama öncesi gösterilir; user>group>client hiyerarşisinde en özgül seviye sonucu belirler.
+
+### Denetim kayıtları  /api/admin/audit-logs
+- GET /api/admin/audit-logs?userId=&event=&limit=  → en yeni kayıtlar. event: login|login_failed|logout|token_refresh|token_revoke|access_denied. Her kayıt: {CreatedAt, email, clientId, event, success, message, ip, userAgent, device, browser, os}.
+
+## Tipik akışlar
+- Yeni uygulama bağlama: (1) admin POST /api/admin/clients ile client oluştur → clientId/secret/redirectUris/logo. (2) Gerekirse client rolleri ekle. (3) Kullanıcılara PUT /api/admin/users/:id ile clientIds[] vererek erişim ver. (4) Uygulama Authorization Code + PKCE akışını /oauth/authorize ile başlatır.
+- Zaman kısıtlı erişim: POST /api/admin/policies (type=time, effect=allow, günler+saat) → POST .../assignments (subjectType=client). Saat dışındaki girişler engellenir ve kullanıcıya mesaj gösterilir.
+- IP kısıtı: type=ip, effect=deny, ipCidrs ile yasak aralık; ya da effect=allow ile yalnızca izinli aralık.
+
+## Notlar / hatalar
+- 401: token yok/geçersiz/iptal edilmiş ya da kimlik bilgisi hatalı. 403: client'a yetki yok ya da politika reddi. 400: doğrulama hatası. 429: rate limit (IP bazlı). 204: gövdesiz başarı (silme).
+- Süresi dolan refresh/erişim kayıtları ve eski auth code'lar düzenli aralıkla temizlenir.
+- Türkçe son kullanıcı mesajları döner (örn. "Bu uygulamaya erişim yetkiniz bulunmuyor.").

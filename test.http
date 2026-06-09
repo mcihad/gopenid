@@ -43,7 +43,12 @@ Content-Type: application/json
   "clientId": "{{clientId}}",
   "clientSecret": "{{clientSecret}}",
   "name": "Demo Web Client",
-  "redirectUris": "{{redirectUri}}"
+  "description": "Park & Bahçe yönetim uygulaması",
+  "homeUrl": "http://localhost:3000",
+  "logoUrl": "https://dummyimage.com/64x64/0f62fe/ffffff.png&text=PB",
+  "redirectUris": "{{redirectUri}}",
+  "tokenTtlSeconds": 3600,
+  "refreshTtlSeconds": 2592000
 }
 
 ### List OIDC clients
@@ -105,3 +110,157 @@ POST {{baseUrl}}/oauth/token
 Content-Type: application/x-www-form-urlencoded
 
 grant_type=authorization_code&code={{authCode}}&redirect_uri={{redirectUriEncoded}}&client_id={{clientId}}&client_secret={{clientSecret}}&code_verifier=plain-verifier
+
+############################################################
+# Extended IAM features
+############################################################
+
+### Store refresh token from the direct login response
+@refreshToken = {{login.response.body.refresh_token}}
+
+### Refresh tokens (rotates the refresh token)
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refresh_token": "{{refreshToken}}"
+}
+
+### Logout (revokes the access token + all refresh tokens of the user)
+POST {{baseUrl}}/api/auth/logout
+Authorization: Bearer {{token}}
+
+### Self-service: my profile
+GET {{baseUrl}}/api/me
+Authorization: Bearer {{token}}
+
+### Self-service: update my profile
+PUT {{baseUrl}}/api/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "System Admin",
+  "phone": "+90 555 111 2233",
+  "title": "Platform Yöneticisi",
+  "avatarUrl": ""
+}
+
+### Self-service: change my password
+POST {{baseUrl}}/api/me/password
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "currentPassword": "{{adminPassword}}",
+  "newPassword": "admin123456"
+}
+
+### Self-service: my roles / departments / groups / clients / sessions
+GET {{baseUrl}}/api/me/roles
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/api/me/departments
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/api/me/groups
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/api/me/clients
+Authorization: Bearer {{token}}
+
+###
+GET {{baseUrl}}/api/me/sessions
+Authorization: Bearer {{token}}
+
+### Admin: user groups
+GET {{baseUrl}}/api/admin/groups
+Authorization: Bearer {{token}}
+
+### Admin: create a group
+# @name createGroup
+POST {{baseUrl}}/api/admin/groups
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "operators",
+  "description": "Operations team"
+}
+
+### Admin: block a user
+POST {{baseUrl}}/api/admin/users/1/block
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "reason": "Güvenlik incelemesi"
+}
+
+### Admin: unblock a user
+POST {{baseUrl}}/api/admin/users/1/unblock
+Authorization: Bearer {{token}}
+
+### Admin: revoke all sessions of a user
+POST {{baseUrl}}/api/admin/users/1/revoke-sessions
+Authorization: Bearer {{token}}
+
+### Admin: list policies
+GET {{baseUrl}}/api/admin/policies
+Authorization: Bearer {{token}}
+
+### Admin: create a time-based deny policy
+# @name createTimePolicy
+POST {{baseUrl}}/api/admin/policies
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "mesai-disi-engelle",
+  "description": "Sadece mesai saatlerinde giriş",
+  "type": "time",
+  "effect": "allow",
+  "daysOfWeek": [1, 2, 3, 4, 5],
+  "startTime": "08:00",
+  "endTime": "18:00"
+}
+
+### Admin: create an IP-based deny policy
+# @name createIPPolicy
+POST {{baseUrl}}/api/admin/policies
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "yasakli-ip",
+  "description": "Belirli IP aralığını reddet",
+  "type": "ip",
+  "effect": "deny",
+  "ipCidrs": "203.0.113.0/24, 198.51.100.7"
+}
+
+### Admin: assign a policy to a client / group / user
+POST {{baseUrl}}/api/admin/policies/{{createTimePolicy.response.body.ID}}/assignments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "subjectType": "client",
+  "subjectId": {{createClient.response.body.ID}}
+}
+
+### Admin: list assignments of a policy
+GET {{baseUrl}}/api/admin/policies/{{createTimePolicy.response.body.ID}}/assignments
+Authorization: Bearer {{token}}
+
+### Admin: audit logs (login/logout/refresh/access_denied)
+GET {{baseUrl}}/api/admin/audit-logs?limit=50
+Authorization: Bearer {{token}}
+
+### Admin: audit logs filtered by event
+GET {{baseUrl}}/api/admin/audit-logs?event=login&limit=20
+Authorization: Bearer {{token}}
+

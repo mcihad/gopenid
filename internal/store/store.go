@@ -48,19 +48,34 @@ func (s *Store) Seed(ctx context.Context, cfg config.Config) error {
 	if err := tx.QueryRow(ctx, `INSERT INTO roles(name, description) VALUES($1,$2) RETURNING id`, "admin", "Full administration access").Scan(&roleID); err != nil {
 		return err
 	}
+	var groupID int64
+	if err := tx.QueryRow(ctx, `INSERT INTO groups(name, description) VALUES($1,$2) RETURNING id`, "administrators", "Built-in administrator group").Scan(&groupID); err != nil {
+		return err
+	}
 	var userID int64
-	if err := tx.QueryRow(ctx, `INSERT INTO users(email, name, password_hash, active, department_id) VALUES($1,$2,$3,true,$4) RETURNING id`, cfg.AdminEmail, "System Admin", string(hash), deptID).Scan(&userID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO users(email, name, password_hash, active, title, department_id) VALUES($1,$2,$3,true,$4,$5) RETURNING id`, cfg.AdminEmail, "System Admin", string(hash), "Platform Administrator", deptID).Scan(&userID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO user_roles(user_id, role_id) VALUES($1,$2)`, userID, roleID); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO user_departments(user_id, department_id) VALUES($1,$2)`, userID, deptID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO user_groups(user_id, group_id) VALUES($1,$2)`, userID, groupID); err != nil {
+		return err
+	}
 	var clientID, clientRoleID int64
-	if err := tx.QueryRow(ctx, `INSERT INTO clients(client_id, client_secret, name, redirect_uris) VALUES($1,$2,$3,$4) RETURNING id`,
+	if err := tx.QueryRow(ctx, `INSERT INTO clients(client_id, client_secret, name, description, home_url, logo_url, redirect_uris, token_ttl_seconds, refresh_ttl_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
 		"gopen-dotnet",
 		"dotnet-secret",
 		"ASP.NET Core MVC Example",
+		"Örnek ASP.NET Core OIDC istemcisi",
+		"http://localhost:5048",
+		"",
 		"http://localhost:5048/signin-oidc,https://localhost:7284/signin-oidc",
+		3600,
+		2592000,
 	).Scan(&clientID); err != nil {
 		return err
 	}
@@ -181,4 +196,8 @@ func placeholders(start int, ids []int64) string {
 		parts[i] = fmt.Sprintf("$%d", start+i)
 	}
 	return strings.Join(parts, ",")
+}
+
+func joinComma(parts []string) string {
+	return strings.Join(parts, ", ")
 }

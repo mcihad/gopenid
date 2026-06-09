@@ -25,6 +25,12 @@ func Open(ctx context.Context, cfg config.Config) (*store.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.DBReset {
+		if _, err := adminPool.Exec(ctx, `DROP SCHEMA IF EXISTS `+cfg.Database.Schema+` CASCADE`); err != nil {
+			adminPool.Close()
+			return nil, err
+		}
+	}
 	if _, err := adminPool.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+cfg.Database.Schema); err != nil {
 		adminPool.Close()
 		return nil, err

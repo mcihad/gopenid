@@ -8,8 +8,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func clientColumnsPrefixed(p string) string {
+	cols := []string{"id", "created_at", "updated_at", "deleted_at", "client_id", "client_secret", "name", "description", "home_url", "logo_url", "redirect_uris", "token_ttl_seconds", "refresh_ttl_seconds"}
+	out := make([]string, len(cols))
+	for i, c := range cols {
+		out[i] = p + "." + c
+	}
+	return joinComma(out)
+}
+
+const clientColumns = `id, created_at, updated_at, deleted_at, client_id, client_secret, name, description, home_url, logo_url, redirect_uris, token_ttl_seconds, refresh_ttl_seconds`
+
 func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id, created_at, updated_at, deleted_at, client_id, client_secret, name, redirect_uris FROM clients WHERE deleted_at IS NULL ORDER BY client_id`)
+	rows, err := s.Pool.Query(ctx, `SELECT `+clientColumns+` FROM clients WHERE deleted_at IS NULL ORDER BY client_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -20,25 +31,31 @@ func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
 		if err := scanClient(rows, &row); err != nil {
 			return nil, err
 		}
-		roles, err := s.ListClientRoles(ctx, row.ID)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		roles, err := s.ListClientRoles(ctx, out[i].ID)
 		if err != nil {
 			return nil, err
 		}
-		row.Roles = roles
-		out = append(out, row)
+		out[i].Roles = roles
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) CreateClient(ctx context.Context, in domain.Client) (domain.Client, error) {
 	var row domain.Client
-	err := s.Pool.QueryRow(ctx, `INSERT INTO clients(client_id, client_secret, name, redirect_uris) VALUES($1,$2,$3,$4) RETURNING id, created_at, updated_at, deleted_at, client_id, client_secret, name, redirect_uris`, in.ClientID, in.ClientSecret, in.Name, in.RedirectURIs).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.ClientID, &row.ClientSecret, &row.Name, &row.RedirectURIs)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO clients(client_id, client_secret, name, description, home_url, logo_url, redirect_uris, token_ttl_seconds, refresh_ttl_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING `+clientColumns,
+		in.ClientID, in.ClientSecret, in.Name, in.Description, in.HomeURL, in.LogoURL, in.RedirectURIs, in.TokenTTLSeconds, in.RefreshTTLSeconds).Scan(clientScanDest(&row)...)
 	return row, err
 }
 
 func (s *Store) GetClient(ctx context.Context, id int64) (domain.Client, error) {
 	var row domain.Client
-	err := s.Pool.QueryRow(ctx, `SELECT id, created_at, updated_at, deleted_at, client_id, client_secret, name, redirect_uris FROM clients WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.ClientID, &row.ClientSecret, &row.Name, &row.RedirectURIs)
+	err := s.Pool.QueryRow(ctx, `SELECT `+clientColumns+` FROM clients WHERE id=$1 AND deleted_at IS NULL`, id).Scan(clientScanDest(&row)...)
 	if err != nil {
 		return row, normalizeErr(err)
 	}
@@ -49,7 +66,7 @@ func (s *Store) GetClient(ctx context.Context, id int64) (domain.Client, error) 
 
 func (s *Store) GetClientByClientID(ctx context.Context, clientID string) (domain.Client, error) {
 	var row domain.Client
-	err := s.Pool.QueryRow(ctx, `SELECT id, created_at, updated_at, deleted_at, client_id, client_secret, name, redirect_uris FROM clients WHERE client_id=$1 AND deleted_at IS NULL`, clientID).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.ClientID, &row.ClientSecret, &row.Name, &row.RedirectURIs)
+	err := s.Pool.QueryRow(ctx, `SELECT `+clientColumns+` FROM clients WHERE client_id=$1 AND deleted_at IS NULL`, clientID).Scan(clientScanDest(&row)...)
 	if err != nil {
 		return row, normalizeErr(err)
 	}
@@ -60,7 +77,8 @@ func (s *Store) GetClientByClientID(ctx context.Context, clientID string) (domai
 
 func (s *Store) UpdateClient(ctx context.Context, id int64, in domain.Client) (domain.Client, error) {
 	var row domain.Client
-	err := s.Pool.QueryRow(ctx, `UPDATE clients SET client_id=$2, client_secret=$3, name=$4, redirect_uris=$5, updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, created_at, updated_at, deleted_at, client_id, client_secret, name, redirect_uris`, id, in.ClientID, in.ClientSecret, in.Name, in.RedirectURIs).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.ClientID, &row.ClientSecret, &row.Name, &row.RedirectURIs)
+	err := s.Pool.QueryRow(ctx, `UPDATE clients SET client_id=$2, client_secret=$3, name=$4, description=$5, home_url=$6, logo_url=$7, redirect_uris=$8, token_ttl_seconds=$9, refresh_ttl_seconds=$10, updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING `+clientColumns,
+		id, in.ClientID, in.ClientSecret, in.Name, in.Description, in.HomeURL, in.LogoURL, in.RedirectURIs, in.TokenTTLSeconds, in.RefreshTTLSeconds).Scan(clientScanDest(&row)...)
 	return row, normalizeErr(err)
 }
 
@@ -109,8 +127,17 @@ func (s *Store) UserAuthorizedForClient(ctx context.Context, userID, clientID in
 	return count > 0, err
 }
 
+func clientScanDest(row *domain.Client) []any {
+	return []any{
+		&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt,
+		&row.ClientID, &row.ClientSecret, &row.Name, &row.Description,
+		&row.HomeURL, &row.LogoURL, &row.RedirectURIs,
+		&row.TokenTTLSeconds, &row.RefreshTTLSeconds,
+	}
+}
+
 func scanClient(rows pgx.Rows, row *domain.Client) error {
-	return rows.Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.ClientID, &row.ClientSecret, &row.Name, &row.RedirectURIs)
+	return rows.Scan(clientScanDest(row)...)
 }
 
 func scanClientRole(rows pgx.Rows, row *domain.ClientRole) error {

@@ -23,9 +23,7 @@ func (h *Handler) createClient(c fiber.Ctx) error {
 	if err := c.Bind().Body(&req); err != nil || req.ClientID == "" || req.ClientSecret == "" || req.Name == "" {
 		return httpx.BadRequest(c, "clientId, clientSecret and name are required")
 	}
-	row, err := h.db.CreateClient(context.Background(), domain.Client{
-		ClientID: req.ClientID, ClientSecret: req.ClientSecret, Name: req.Name, RedirectURIs: req.RedirectURIs,
-	})
+	row, err := h.db.CreateClient(context.Background(), req.toClient())
 	if err != nil {
 		return httpx.BadRequest(c, "client already exists or invalid")
 	}
@@ -45,9 +43,7 @@ func (h *Handler) updateClient(c fiber.Ctx) error {
 	if err := c.Bind().Body(&req); err != nil || req.ClientID == "" || req.ClientSecret == "" || req.Name == "" {
 		return httpx.BadRequest(c, "clientId, clientSecret and name are required")
 	}
-	row, err := h.db.UpdateClient(context.Background(), idParam(c), domain.Client{
-		ClientID: req.ClientID, ClientSecret: req.ClientSecret, Name: req.Name, RedirectURIs: req.RedirectURIs,
-	})
+	row, err := h.db.UpdateClient(context.Background(), idParam(c), req.toClient())
 	if err != nil {
 		return httpx.BadRequest(c, "client already exists or invalid")
 	}
@@ -106,10 +102,29 @@ func roleIDParam(c fiber.Ctx) int64 {
 }
 
 type clientInput struct {
-	ClientID     string `json:"clientId"`
-	ClientSecret string `json:"clientSecret"`
-	Name         string `json:"name"`
-	RedirectURIs string `json:"redirectUris"`
+	ClientID          string `json:"clientId"`
+	ClientSecret      string `json:"clientSecret"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	HomeURL           string `json:"homeUrl"`
+	LogoURL           string `json:"logoUrl"`
+	RedirectURIs      string `json:"redirectUris"`
+	TokenTTLSeconds   int    `json:"tokenTtlSeconds"`
+	RefreshTTLSeconds int    `json:"refreshTtlSeconds"`
+}
+
+func (req clientInput) toClient() domain.Client {
+	return domain.Client{
+		ClientID:          req.ClientID,
+		ClientSecret:      req.ClientSecret,
+		Name:              req.Name,
+		Description:       req.Description,
+		HomeURL:           req.HomeURL,
+		LogoURL:           req.LogoURL,
+		RedirectURIs:      req.RedirectURIs,
+		TokenTTLSeconds:   req.TokenTTLSeconds,
+		RefreshTTLSeconds: req.RefreshTTLSeconds,
+	}
 }
 
 type clientRoleInput struct {
