@@ -1,0 +1,107 @@
+@baseUrl = http://localhost:8080
+@adminEmail = admin@gopenid.local
+@adminPassword = admin12345
+@clientId = park-bahce
+@clientSecret = 7b56582b5ca7e7753267481df8dfd05231ff531847b894fb6b71c46ac46f87b8
+@redirectUri = http://localhost:3000/callback
+@redirectUriEncoded = http%3A%2F%2Flocalhost%3A3000%2Fcallback
+
+### OIDC discovery metadata
+GET {{baseUrl}}/.well-known/openid-configuration
+
+### JWKS public keys
+GET {{baseUrl}}/.well-known/jwks.json
+
+### Direct JWT login
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
+}
+
+### Store token from login
+@token = {{login.response.body.access_token}}
+
+### Validate protected admin route with RS256 bearer token
+GET {{baseUrl}}/api/admin/users
+Authorization: Bearer {{token}}
+
+### Get userinfo with RS256 bearer token
+GET {{baseUrl}}/oauth/userinfo
+Authorization: Bearer {{token}}
+
+### Create OIDC client
+# @name createClient
+POST {{baseUrl}}/api/admin/clients
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "clientId": "{{clientId}}",
+  "clientSecret": "{{clientSecret}}",
+  "name": "Demo Web Client",
+  "redirectUris": "{{redirectUri}}"
+}
+
+### List OIDC clients
+GET {{baseUrl}}/api/admin/clients
+Authorization: Bearer {{token}}
+
+### Create client role
+# @name createClientRole
+POST {{baseUrl}}/api/admin/clients/{{createClient.response.body.ID}}/roles
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "reader",
+  "description": "Read access in demo client"
+}
+
+### Authorize admin user for the OIDC client and client role
+PUT {{baseUrl}}/api/admin/users/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "name": "System Admin",
+  "password": "",
+  "active": true,
+  "departmentId": 1,
+  "roleIds": [1],
+  "clientIds": [{{createClient.response.body.ID}}],
+  "clientRoleIds": [{{createClientRole.response.body.ID}}]
+}
+
+### OAuth password grant with client_secret_post
+# @name passwordGrant
+POST {{baseUrl}}/oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&username={{adminEmail}}&password={{adminPassword}}&client_id={{clientId}}&client_secret={{clientSecret}}&scope=openid+profile+email+roles+client_roles
+
+### Store OAuth access token
+@oauthToken = {{passwordGrant.response.body.access_token}}
+
+### Userinfo with OAuth access token
+GET {{baseUrl}}/oauth/userinfo
+Authorization: Bearer {{oauthToken}}
+
+### Authorization Code Flow - Step 1: open this URL in browser
+# Login with admin credentials. The redirect URL will contain ?code=<AUTH_CODE>&state=state-123.
+# REST Client cannot reliably extract the query parameter from an interactive browser redirect,
+# so paste the returned code below.
+GET {{baseUrl}}/oauth/authorize?response_type=code&client_id={{clientId}}&redirect_uri={{redirectUriEncoded}}&scope=openid%20profile%20email%20roles%20client_roles&state=state-123&nonce=nonce-123&code_challenge=plain-verifier&code_challenge_method=plain
+
+### Authorization Code Flow - Step 2: paste code from redirect here
+@authCode = paste-code-here
+
+### Authorization Code Flow - Step 3: exchange code for RS256 tokens
+POST {{baseUrl}}/oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code={{authCode}}&redirect_uri={{redirectUriEncoded}}&client_id={{clientId}}&client_secret={{clientSecret}}&code_verifier=plain-verifier
