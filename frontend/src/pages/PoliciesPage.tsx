@@ -146,20 +146,40 @@ function AssignmentsModal({ policy, onClose }: { policy: Policy; onClose: () => 
   const clients = useQuery({ queryKey: ['clients'], queryFn: api.clients.list })
   const [subjectType, setSubjectType] = useState<PolicySubject>('client')
   const [subjectId, setSubjectId] = useState<number>(0)
+  const [subjectSearch, setSubjectSearch] = useState('')
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['assignments', policy.ID] })
   const create = useMutation({
     mutationFn: () => api.policies.assignments.create(policy.ID, { subjectType, subjectId }),
-    onSuccess: () => { invalidate(); setSubjectId(0) },
+    onSuccess: () => { invalidate(); setSubjectId(0); setSubjectSearch('') },
   })
   const remove = useMutation({
     mutationFn: (assignmentId: number) => api.policies.assignments.remove(policy.ID, assignmentId),
     onSuccess: invalidate,
   })
 
-  const options = subjectType === 'client' ? (clients.data ?? []).map((c) => ({ id: c.ID, label: `${c.name} (${c.clientId})` }))
-    : subjectType === 'group' ? (groups.data ?? []).map((g) => ({ id: g.ID, label: g.name }))
-      : (users.data ?? []).map((u) => ({ id: u.ID, label: `${u.name} — ${u.email}` }))
+  const options = useMemo(() => {
+    if (subjectType === 'client') return (clients.data ?? []).map((c) => ({ id: c.ID, label: c.name, meta: c.clientId }))
+    if (subjectType === 'group') return (groups.data ?? []).map((g) => ({ id: g.ID, label: g.name, meta: g.description }))
+    return (users.data ?? []).map((u) => ({ id: u.ID, label: u.name, meta: u.email }))
+  }, [subjectType, clients.data, groups.data, users.data])
+
+  const assignedIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const assignment of assignments.data ?? []) {
+      if (assignment.subjectType === subjectType) ids.add(assignment.subjectId)
+    }
+    return ids
+  }, [assignments.data, subjectType])
+
+  const filteredOptions = useMemo(() => {
+    const query = lower(subjectSearch)
+    if (!query) return options
+    return options.filter((option) => lower(option.label).includes(query) || lower(option.meta ?? '').includes(query))
+  }, [options, subjectSearch])
+
+  const selectedOption = options.find((option) => option.id === subjectId)
+  const canAssign = subjectId > 0 && !assignedIds.has(subjectId) && !create.isPending
 
   const subjectLabel = (assignment: PolicyAssignment) => {
     if (assignment.subjectType === 'client') return clients.data?.find((c) => c.ID === assignment.subjectId)?.name ?? `#${assignment.subjectId}`
@@ -173,17 +193,66 @@ function AssignmentsModal({ policy, onClose }: { policy: Policy; onClose: () => 
       <div className="modal-body">
         <div className="modal-form">
           {create.error && <Alert type="error" message={create.error.message} />}
-          <div className="assign-row">
-            <select value={subjectType} onChange={(event) => { setSubjectType(event.target.value as PolicySubject); setSubjectId(0) }}>
-              <option value="client">Uygulama</option>
-              <option value="group">Grup</option>
-              <option value="user">Kullanıcı</option>
-            </select>
-            <select value={subjectId} onChange={(event) => setSubjectId(Number(event.target.value))}>
-              <option value={0}>Seçin...</option>
-              {options.map((opt) => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
-            </select>
-            <button type="button" className="btn-primary" disabled={!subjectId || create.isPending} onClick={() => create.mutate()}><Plus size={14} />Ata</button>
+          <div className="assignment-workspace">
+            <div className="assignment-selector-panel">
+              <div className="assignment-type-tabs" role="tablist" aria-label="Özne türü seçimi">
+                {(['client', 'group', 'user'] as PolicySubject[]).map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    className={`assignment-type-tab ${subjectType === type ? 'active' : ''}`}
+                    onClick={() => {
+                      setSubjectType(type)
+                      setSubjectId(0)
+                      setSubjectSearch('')
+                    }}
+                  >
+                    {subjectTypeLabel(type)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="assignment-search-wrap">
+                <input
+                  type="text"
+                  value={subjectSearch}
+                  onChange={(event) => setSubjectSearch(event.target.value)}
+                  placeholder={`${subjectTypeLabel(subjectType)} ara...`}
+                />
+              </div>
+
+              <div className="assignment-option-list">
+                {filteredOptions.length === 0 ? (
+                  <Muted>Aramaya uyan kayıt bulunamadı.</Muted>
+                ) : (
+                  filteredOptions.map((option) => {
+                    const alreadyAssigned = assignedIds.has(option.id)
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={`assignment-option ${subjectId === option.id ? 'selected' : ''}`}
+                        onClick={() => setSubjectId(option.id)}
+                        disabled={alreadyAssigned}
+                      >
+                        <span className="assignment-option-main">{option.label}</span>
+                        {option.meta && <span className="assignment-option-meta">{option.meta}</span>}
+                        {alreadyAssigned && <span className="tag-badge">Zaten atandı</span>}
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </div>
+
+            <aside className="assignment-action-panel">
+              <p className="muted-text">Seçili {subjectTypeLabel(subjectType).toLowerCase()}</p>
+              <strong>{selectedOption?.label ?? 'Henüz seçim yapılmadı'}</strong>
+              {selectedOption?.meta && <span className="muted-text">{selectedOption.meta}</span>}
+              <button type="button" className="btn-primary" disabled={!canAssign} onClick={() => create.mutate()}>
+                <Plus size={14} />Ata
+              </button>
+            </aside>
           </div>
 
           {assignments.isLoading ? <Muted>Yükleniyor...</Muted> : (assignments.data?.length ?? 0) === 0 ? <Muted>Bu politika henüz hiçbir özneye atanmadı.</Muted> : (

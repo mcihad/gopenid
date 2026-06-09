@@ -1,10 +1,10 @@
 @baseUrl = http://localhost:8080
 @adminEmail = admin@gopenid.local
 @adminPassword = admin12345
-@clientId = park-bahce
-@clientSecret = 7b56582b5ca7e7753267481df8dfd05231ff531847b894fb6b71c46ac46f87b8
-@redirectUri = http://localhost:3000/callback
-@redirectUriEncoded = http%3A%2F%2Flocalhost%3A3000%2Fcallback
+@clientId = gopen-dotnet
+@clientSecret = demo-secret
+@redirectUri = http://127.0.0.1:5065/signin-oidc
+@redirectUriEncoded = http%3A%2F%2F127.0.0.1%3A5065%2Fsignin-oidc
 
 ### OIDC discovery metadata
 GET {{baseUrl}}/.well-known/openid-configuration
