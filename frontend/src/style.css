@@ -343,6 +343,31 @@ body {
   font-size: 14px;
 }
 
+.audit-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) repeat(6, minmax(120px, 160px));
+  gap: 8px;
+  width: min(100%, 1120px);
+}
+
+.audit-filters input,
+.audit-filters select {
+  min-height: 40px;
+  background-color: var(--colors-surface-1);
+  border: 0;
+  border-bottom: 1px solid var(--colors-ink-subtle);
+  padding: 10px 12px;
+  color: var(--colors-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+
+.audit-filters input:focus,
+.audit-filters select:focus {
+  outline: none;
+  border-bottom: 2px solid var(--colors-primary);
+}
+
 .search-box-wrap {
   position: relative;
   display: flex;
@@ -493,6 +518,16 @@ button.btn-tertiary:hover:not(:disabled) {
   font-family: var(--font-mono);
   font-size: 13px;
   color: var(--colors-ink-muted);
+}
+
+.tree-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tree-cell svg {
+  color: var(--colors-ink-subtle);
 }
 
 /* Row Action Links */
@@ -673,6 +708,24 @@ button.btn-tertiary:hover:not(:disabled) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--colors-hairline);
+  border-top: 0;
+  background-color: var(--colors-canvas);
+  padding: 12px 16px;
+  color: var(--colors-ink-muted);
+  font-size: 14px;
+}
+
+.pagination-bar div {
+  display: flex;
   gap: 8px;
 }
 
@@ -947,6 +1000,49 @@ button.btn-tertiary:hover:not(:disabled) {
 
 .state-empty.error-state {
   color: var(--colors-semantic-error);
+}
+
+.app-error-boundary {
+  min-height: 60vh;
+}
+
+.toast-stack {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: grid;
+  gap: 8px;
+  width: min(420px, calc(100vw - 48px));
+  z-index: 200;
+}
+
+.toast-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 12px;
+  padding: 12px 14px;
+  background-color: var(--colors-canvas);
+  border: 1px solid var(--colors-hairline-strong);
+  border-left: 4px solid var(--colors-semantic-info);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
+  color: var(--colors-ink);
+  font-size: 14px;
+}
+
+.toast-item.error {
+  border-left-color: var(--colors-semantic-error);
+}
+
+.toast-item.success {
+  border-left-color: var(--colors-semantic-success);
+}
+
+.toast-item button {
+  min-height: auto;
+  padding: 0;
+  background: transparent;
+  color: var(--colors-ink-muted);
 }
 
 /* Animations */

@@ -29,6 +29,23 @@ func (s *Store) GetSigningKey(ctx context.Context, keyID string) (domain.Signing
 	return key, normalizeErr(err)
 }
 
+func (s *Store) ListSigningKeys(ctx context.Context) ([]domain.SigningKey, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, created_at, updated_at, deleted_at, key_id, private_pem, active FROM signing_keys WHERE active=true AND deleted_at IS NULL ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.SigningKey
+	for rows.Next() {
+		var key domain.SigningKey
+		if err := rows.Scan(&key.ID, &key.CreatedAt, &key.UpdatedAt, &key.DeletedAt, &key.KeyID, &key.PrivatePEM, &key.Active); err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CreateSigningKey(ctx context.Context, key domain.SigningKey) error {
 	return s.Pool.QueryRow(ctx, `INSERT INTO signing_keys(key_id, private_pem, active) VALUES($1,$2,$3) RETURNING id`, key.KeyID, key.PrivatePEM, key.Active).Scan(&key.ID)
 }

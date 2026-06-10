@@ -1,0 +1,221 @@
+openapi: 3.1.0
+info:
+  title: gOpenID Admin API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      responses:
+        "200":
+          description: Health status
+  /readyz:
+    get:
+      security: []
+      responses:
+        "200":
+          description: Database-backed readiness status
+  /metrics:
+    get:
+      security: []
+      responses:
+        "200":
+          description: Prometheus metrics
+  /api/auth/login:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Access and refresh token pair
+  /api/auth/refresh:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: Rotated token pair
+  /api/auth/logout:
+    post:
+      responses:
+        "200":
+          description: Current access token and refresh sessions revoked
+  /api/admin/users:
+    get:
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserInput" }
+      responses:
+        "201":
+          description: Created user
+  /api/admin/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/id"
+    get:
+      responses:
+        "200": { description: User }
+    put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserInput" }
+      responses:
+        "200": { description: Updated user }
+    delete:
+      responses:
+        "204": { description: Deleted }
+  /api/admin/departments:
+    get:
+      responses:
+        "200":
+          description: Department tree-compatible list
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DepartmentInput" }
+      responses:
+        "201": { description: Created department }
+  /api/admin/clients:
+    get:
+      responses:
+        "200": { description: OIDC clients without secret values }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientInput" }
+      responses:
+        "201": { description: Created client; secret returned once }
+  /api/admin/audit-logs:
+    get:
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: pageSize, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: event, in: query, schema: { type: string } }
+        - { name: email, in: query, schema: { type: string } }
+        - { name: clientId, in: query, schema: { type: string } }
+        - { name: ip, in: query, schema: { type: string } }
+        - { name: success, in: query, schema: { type: boolean } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: Paginated audit logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditLog" }
+                  total: { type: integer }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+  schemas:
+    DepartmentInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parentId: { type: integer, format: int64, nullable: true }
+    ClientInput:
+      type: object
+      required: [clientId, name, redirectUris]
+      properties:
+        clientId: { type: string }
+        clientSecret: { type: string }
+        name: { type: string }
+        description: { type: string }
+        homeUrl: { type: string }
+        logoUrl: { type: string }
+        redirectUris: { type: string }
+        tokenTtlSeconds: { type: integer }
+        refreshTtlSeconds: { type: integer }
+        allowPasswordGrant: { type: boolean }
+    UserInput:
+      type: object
+      required: [email, name]
+      properties:
+        email: { type: string, format: email }
+        name: { type: string }
+        password: { type: string }
+        active: { type: boolean }
+        blocked: { type: boolean }
+        blockedReason: { type: string }
+        departmentId: { type: integer, format: int64, nullable: true }
+        roleIds: { type: array, items: { type: integer, format: int64 } }
+        clientIds: { type: array, items: { type: integer, format: int64 } }
+        clientRoleIds: { type: array, items: { type: integer, format: int64 } }
+        departmentIds: { type: array, items: { type: integer, format: int64 } }
+        groupIds: { type: array, items: { type: integer, format: int64 } }
+    User:
+      type: object
+      properties:
+        ID: { type: integer, format: int64 }
+        email: { type: string }
+        name: { type: string }
+        active: { type: boolean }
+        blocked: { type: boolean }
+    AuditLog:
+      type: object
+      properties:
+        ID: { type: integer, format: int64 }
+        CreatedAt: { type: string, format: date-time }
+        userId: { type: integer, format: int64, nullable: true }
+        email: { type: string }
+        clientId: { type: string }
+        event: { type: string }
+        success: { type: boolean }
+        message: { type: string }
+        ip: { type: string }
+        userAgent: { type: string }

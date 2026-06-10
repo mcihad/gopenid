@@ -1,9 +1,9 @@
 package admin
 
 import (
-	"context"
 	"errors"
 
+	"gopenid/internal/audit"
 	"gopenid/internal/domain"
 	"gopenid/internal/httpx"
 	"gopenid/internal/store"
@@ -13,7 +13,7 @@ import (
 )
 
 func (h *Handler) listUsers(c fiber.Ctx) error {
-	rows, err := h.db.ListUsers(context.Background())
+	rows, err := h.db.ListUsers(c.Context())
 	if err != nil {
 		return httpx.Error(c, 500, "list failed")
 	}
@@ -30,7 +30,7 @@ func (h *Handler) createUser(c fiber.Ctx) error {
 		return httpx.Error(c, 500, "password failed")
 	}
 	user := req.toUser(string(hash))
-	user, err = h.db.CreateUser(context.Background(), user, req.RoleIDs, req.ClientIDs, req.ClientRoleIDs, req.DepartmentIDs, req.GroupIDs)
+	user, err = h.db.CreateUser(c.Context(), user, req.RoleIDs, req.ClientIDs, req.ClientRoleIDs, req.DepartmentIDs, req.GroupIDs)
 	if err != nil {
 		return httpx.BadRequest(c, "user already exists or invalid")
 	}
@@ -38,7 +38,7 @@ func (h *Handler) createUser(c fiber.Ctx) error {
 }
 
 func (h *Handler) getUser(c fiber.Ctx) error {
-	user, err := h.db.GetUser(context.Background(), idParam(c))
+	user, err := h.db.GetUser(c.Context(), idParam(c))
 	if err != nil {
 		return httpx.NotFound(c)
 	}
@@ -59,7 +59,7 @@ func (h *Handler) updateUser(c fiber.Ctx) error {
 		passwordHash = string(hash)
 	}
 	user := req.toUser(passwordHash)
-	user, err := h.db.UpdateUser(context.Background(), idParam(c), user, req.RoleIDs, req.ClientIDs, req.ClientRoleIDs, req.DepartmentIDs, req.GroupIDs)
+	user, err := h.db.UpdateUser(c.Context(), idParam(c), user, req.RoleIDs, req.ClientIDs, req.ClientRoleIDs, req.DepartmentIDs, req.GroupIDs)
 	if err != nil {
 		return httpx.BadRequest(c, "user already exists or invalid")
 	}
@@ -67,7 +67,7 @@ func (h *Handler) updateUser(c fiber.Ctx) error {
 }
 
 func (h *Handler) deleteUser(c fiber.Ctx) error {
-	if err := h.db.DeleteUser(context.Background(), idParam(c)); err != nil {
+	if err := h.db.DeleteUser(c.Context(), idParam(c)); err != nil {
 		return httpx.Error(c, 500, "delete failed")
 	}
 	return c.SendStatus(204)
@@ -78,30 +78,42 @@ func (h *Handler) blockUser(c fiber.Ctx) error {
 		Reason string `json:"reason"`
 	}
 	_ = c.Bind().Body(&req)
-	if err := h.db.SetBlocked(context.Background(), idParam(c), true, req.Reason); err != nil {
+	user, _ := h.db.GetUser(c.Context(), idParam(c))
+	if err := h.db.SetBlocked(c.Context(), idParam(c), true, req.Reason); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return httpx.NotFound(c)
 		}
 		return httpx.Error(c, 500, "block failed")
 	}
 	// Blocking should also invalidate active refresh tokens.
-	_ = h.db.RevokeAllUserRefreshTokens(context.Background(), idParam(c))
+	_ = h.db.RevokeAllUserRefreshTokens(c.Context(), idParam(c))
+	if user.ID != 0 && h.recorder != nil {
+		h.recorder.Record(c, audit.Entry{UserID: &user.ID, Email: user.Email, Event: domain.EventUserBlocked, Success: true, Message: req.Reason})
+	}
 	return c.JSON(fiber.Map{"message": "user blocked"})
 }
 
 func (h *Handler) unblockUser(c fiber.Ctx) error {
-	if err := h.db.SetBlocked(context.Background(), idParam(c), false, ""); err != nil {
+	user, _ := h.db.GetUser(c.Context(), idParam(c))
+	if err := h.db.SetBlocked(c.Context(), idParam(c), false, ""); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return httpx.NotFound(c)
 		}
 		return httpx.Error(c, 500, "unblock failed")
 	}
+	if user.ID != 0 && h.recorder != nil {
+		h.recorder.Record(c, audit.Entry{UserID: &user.ID, Email: user.Email, Event: domain.EventUserUnblocked, Success: true})
+	}
 	return c.JSON(fiber.Map{"message": "user unblocked"})
 }
 
 func (h *Handler) revokeUserSessions(c fiber.Ctx) error {
-	if err := h.db.RevokeAllUserRefreshTokens(context.Background(), idParam(c)); err != nil {
+	user, _ := h.db.GetUser(c.Context(), idParam(c))
+	if err := h.db.RevokeAllUserRefreshTokens(c.Context(), idParam(c)); err != nil {
 		return httpx.Error(c, 500, "revoke failed")
+	}
+	if user.ID != 0 && h.recorder != nil {
+		h.recorder.Record(c, audit.Entry{UserID: &user.ID, Email: user.Email, Event: domain.EventTokenRevoke, Success: true, Message: "admin revoked sessions"})
 	}
 	return c.JSON(fiber.Map{"message": "sessions revoked"})
 }

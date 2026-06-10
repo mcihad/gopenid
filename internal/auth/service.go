@@ -25,6 +25,8 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrUserInactive       = errors.New("user is inactive")
 	ErrUserBlocked        = errors.New("user is blocked")
+	ErrUserLocked         = errors.New("user is temporarily locked")
+	ErrMFACodeRequired    = errors.New("mfa code is required")
 	ErrTokenRevoked       = errors.New("token has been revoked")
 )
 
@@ -41,12 +43,16 @@ func New(db *store.Store, cfg config.Config, keyManager *keys.Manager) *Service 
 func (s *Service) Config() config.Config { return s.cfg }
 
 // Authenticate verifies credentials and account state.
-func (s *Service) Authenticate(email, password string) (domain.User, error) {
-	user, err := s.db.GetUserByEmail(context.Background(), email)
+func (s *Service) Authenticate(ctx context.Context, email, password, totpCode string) (domain.User, error) {
+	user, err := s.db.GetUserByEmail(ctx, email)
 	if err != nil {
 		return user, ErrInvalidCredentials
 	}
+	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+		return user, ErrUserLocked
+	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		_ = s.db.RecordFailedLogin(ctx, user.ID, s.cfg.MaxLoginFailures, s.cfg.LoginLockout.String())
 		return user, ErrInvalidCredentials
 	}
 	if !user.Active {
@@ -54,6 +60,9 @@ func (s *Service) Authenticate(email, password string) (domain.User, error) {
 	}
 	if user.Blocked {
 		return user, ErrUserBlocked
+	}
+	if user.MFAEnabled && !VerifyTOTP(user.TOTPSecret, totpCode, time.Now()) {
+		return user, ErrMFACodeRequired
 	}
 	return user, nil
 }
@@ -65,6 +74,11 @@ type Tokens struct {
 	RefreshToken string
 	ExpiresIn    int
 	Scope        string
+}
+
+type TokenOptions struct {
+	AuthTime *time.Time
+	Code     string
 }
 
 // accessTTL returns the access-token lifetime for a client, falling back to the
@@ -86,15 +100,32 @@ func (s *Service) refreshTTL(client domain.Client) time.Duration {
 // IssueTokens creates an access token (and optionally an id and refresh token)
 // for a user/client pair. clientID is the public client identifier; client may
 // be the zero value for first-party logins.
-func (s *Service) IssueTokens(ctx context.Context, user domain.User, client domain.Client, clientID, scope, nonce string, withRefresh bool) (Tokens, error) {
+func (s *Service) IssueTokens(ctx context.Context, user domain.User, client domain.Client, clientID, scope, nonce string, withRefresh bool, options ...TokenOptions) (Tokens, error) {
 	ttl := s.accessTTL(client)
-	access, _, err := s.signToken(user, clientID, scope, "", "access", ttl)
+	opts := TokenOptions{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	access, _, err := s.signToken(user, clientID, scope, "", "access", ttl, nil)
 	if err != nil {
 		return Tokens{}, err
 	}
 	out := Tokens{AccessToken: access, ExpiresIn: int(ttl.Seconds()), Scope: strings.TrimSpace(scope)}
 	if scopeContains(scope, "openid") {
-		idToken, _, err := s.signToken(user, clientID, scope, nonce, "id", ttl)
+		extra := jwt.MapClaims{"at_hash": oidcHash(access)}
+		if opts.Code != "" {
+			extra["c_hash"] = oidcHash(opts.Code)
+		}
+		authTime := opts.AuthTime
+		if authTime == nil {
+			authTime = user.LastLoginAt
+		}
+		if authTime == nil {
+			now := time.Now()
+			authTime = &now
+		}
+		extra["auth_time"] = authTime.Unix()
+		idToken, _, err := s.signToken(user, clientID, scope, nonce, "id", ttl, extra)
 		if err != nil {
 			return Tokens{}, err
 		}
@@ -112,11 +143,11 @@ func (s *Service) IssueTokens(ctx context.Context, user domain.User, client doma
 
 // AccessToken issues a standalone access token (first-party login).
 func (s *Service) AccessToken(user domain.User, clientID, scope string) (string, error) {
-	token, _, err := s.signToken(user, clientID, scope, "", "access", s.cfg.TokenTTL)
+	token, _, err := s.signToken(user, clientID, scope, "", "access", s.cfg.TokenTTL, nil)
 	return token, err
 }
 
-func (s *Service) signToken(user domain.User, clientID, scope, nonce, tokenUse string, ttl time.Duration) (string, string, error) {
+func (s *Service) signToken(user domain.User, clientID, scope, nonce, tokenUse string, ttl time.Duration, extra jwt.MapClaims) (string, string, error) {
 	now := time.Now()
 	jti := uuid.NewString()
 	roles := make([]string, 0, len(user.Roles))
@@ -151,6 +182,9 @@ func (s *Service) signToken(user domain.User, clientID, scope, nonce, tokenUse s
 	}
 	if scopeContains(scope, "client_roles") {
 		applyClientRoleClaims(claims, user, clientID)
+	}
+	for key, value := range extra {
+		claims[key] = value
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = s.keys.KeyID()
@@ -193,7 +227,8 @@ func (s *Service) Verify(ctx context.Context, tokenText string) (jwt.MapClaims, 
 		if token.Method != jwt.SigningMethodRS256 {
 			return nil, jwt.ErrTokenSignatureInvalid
 		}
-		return s.keys.PublicKey(), nil
+		kid, _ := token.Header["kid"].(string)
+		return s.keys.PublicKeyFor(kid), nil
 	}, jwt.WithIssuer(s.cfg.Issuer))
 	if err != nil || !token.Valid {
 		return nil, jwt.ErrTokenInvalidClaims
@@ -284,6 +319,15 @@ func scopeContains(scope, needle string) bool {
 		}
 	}
 	return false
+}
+
+func ScopeContains(scope, needle string) bool {
+	return scopeContains(scope, needle)
+}
+
+func oidcHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2])
 }
 
 // RandomToken returns a URL-safe random string of the given byte size.

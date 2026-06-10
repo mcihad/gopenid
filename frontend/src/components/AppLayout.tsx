@@ -20,6 +20,8 @@ const navItems: NavItem[] = [
 export function AppLayout() {
     const navigate = useNavigate()
     const user = auth.user
+    const isAdmin = user?.roles.includes('admin') ?? false
+    const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.to === '/')
 
     const handleLogout = async () => {
         await logout()
@@ -35,7 +37,7 @@ export function AppLayout() {
                 </Link>
 
                 <nav className="nav-tabs-wrapper">
-                    {navItems.map((item) => (
+                    {visibleNavItems.map((item) => (
                         <Link
                             key={item.to}
                             to={item.to}

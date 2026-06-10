@@ -9,8 +9,9 @@ export function LoginPage() {
   const navigate = useNavigate()
   const [email, setEmail] = useState('admin@gopenid.local')
   const [password, setPassword] = useState('admin12345')
+  const [totpCode, setTotpCode] = useState('')
   const mutation = useMutation({
-    mutationFn: () => login(email, password),
+    mutationFn: () => login(email, password, totpCode),
     onSuccess: () => navigate({ to: '/' }),
   })
 
@@ -32,6 +33,9 @@ export function LoginPage() {
         </Field>
         <Field label="Parola">
           <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" required />
+        </Field>
+        <Field label="Doğrulama kodu">
+          <input value={totpCode} onChange={(event) => setTotpCode(event.target.value)} placeholder="000000" inputMode="numeric" autoComplete="one-time-code" />
         </Field>
 
         <button className="btn-primary" disabled={mutation.isPending}>

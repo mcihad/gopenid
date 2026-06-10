@@ -1,13 +1,11 @@
 package auth
 
 import (
-	"context"
 	"strings"
-
-	"gopenid/internal/httpx"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
+	"gopenid/internal/httpx"
 )
 
 const claimsLocalKey = "auth.claims"
@@ -20,7 +18,7 @@ func RequireBearer(svc *Service) fiber.Handler {
 		if tokenText == "" {
 			return httpx.Error(c, fiber.StatusUnauthorized, "missing bearer token")
 		}
-		claims, err := svc.Verify(context.Background(), tokenText)
+		claims, err := svc.Verify(c.Context(), tokenText)
 		if err != nil {
 			if err == ErrTokenRevoked {
 				return httpx.Error(c, fiber.StatusUnauthorized, "token has been revoked")
@@ -29,6 +27,23 @@ func RequireBearer(svc *Service) fiber.Handler {
 		}
 		c.Locals(claimsLocalKey, claims)
 		return c.Next()
+	}
+}
+
+func RequireRole(role string) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		claims, ok := ClaimsFromCtx(c)
+		if !ok {
+			return httpx.Error(c, fiber.StatusUnauthorized, "invalid bearer token")
+		}
+		if roles, ok := claims["roles"].([]any); ok {
+			for _, item := range roles {
+				if item == role {
+					return c.Next()
+				}
+			}
+		}
+		return httpx.Error(c, fiber.StatusForbidden, "insufficient role")
 	}
 }
 

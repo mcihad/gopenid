@@ -1,17 +1,19 @@
 package admin
 
 import (
+	"gopenid/internal/audit"
 	"gopenid/internal/store"
 
 	"github.com/gofiber/fiber/v3"
 )
 
 type Handler struct {
-	db *store.Store
+	db       *store.Store
+	recorder *audit.Recorder
 }
 
-func New(db *store.Store) *Handler {
-	return &Handler{db: db}
+func New(db *store.Store, recorder *audit.Recorder) *Handler {
+	return &Handler{db: db, recorder: recorder}
 }
 
 func (h *Handler) Mount(app *fiber.App) {

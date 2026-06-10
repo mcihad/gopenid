@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const userColumns = `id, created_at, updated_at, deleted_at, email, name, password_hash, active, blocked, blocked_reason, phone, title, avatar_url, last_login_at, department_id`
+const userColumns = `id, created_at, updated_at, deleted_at, email, name, password_hash, active, blocked, blocked_reason, phone, title, avatar_url, last_login_at, failed_login_count, locked_until, totp_secret, mfa_enabled, email_verified, department_id`
 
 func (s *Store) ListUsers(ctx context.Context) ([]domain.User, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT `+userColumns+` FROM users WHERE deleted_at IS NULL ORDER BY email`)
@@ -125,6 +125,39 @@ func (s *Store) ChangePassword(ctx context.Context, id int64, passwordHash strin
 	return nil
 }
 
+func (s *Store) SetTOTPSecret(ctx context.Context, id int64, secret string) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE users SET totp_secret=$2, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, secret)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetMFAEnabled(ctx context.Context, id int64, enabled bool) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE users SET mfa_enabled=$2, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) SetEmailVerified(ctx context.Context, id int64, verified bool) error {
+	tag, err := s.Pool.Exec(ctx, `UPDATE users SET email_verified=$2, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, verified)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // SetBlocked toggles a user's blocked flag with an optional reason.
 func (s *Store) SetBlocked(ctx context.Context, id int64, blocked bool, reason string) error {
 	tag, err := s.Pool.Exec(ctx, `UPDATE users SET blocked=$2, blocked_reason=$3, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, blocked, reason)
@@ -139,7 +172,18 @@ func (s *Store) SetBlocked(ctx context.Context, id int64, blocked bool, reason s
 
 // TouchLastLogin records the time of a successful login.
 func (s *Store) TouchLastLogin(ctx context.Context, id int64) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE users SET last_login_at=now() WHERE id=$1`, id)
+	_, err := s.Pool.Exec(ctx, `UPDATE users SET last_login_at=now(), failed_login_count=0, locked_until=NULL WHERE id=$1`, id)
+	return err
+}
+
+func (s *Store) RecordFailedLogin(ctx context.Context, id int64, maxAttempts int, lockFor string) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+	if lockFor == "" {
+		lockFor = "15 minutes"
+	}
+	_, err := s.Pool.Exec(ctx, `UPDATE users SET failed_login_count=failed_login_count+1, locked_until=CASE WHEN failed_login_count+1 >= $2 THEN now()+$3::interval ELSE locked_until END, updated_at=now() WHERE id=$1`, id, maxAttempts, lockFor)
 	return err
 }
 
@@ -196,7 +240,7 @@ func (s *Store) userRoles(ctx context.Context, userID int64) ([]domain.Role, err
 }
 
 func (s *Store) userDepartments(ctx context.Context, userID int64) ([]domain.Department, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT d.id, d.created_at, d.updated_at, d.deleted_at, d.name, d.description FROM departments d JOIN user_departments ud ON ud.department_id=d.id WHERE ud.user_id=$1 AND d.deleted_at IS NULL ORDER BY d.name`, userID)
+	rows, err := s.Pool.Query(ctx, `SELECT d.id, d.created_at, d.updated_at, d.deleted_at, d.name, d.description, d.parent_id FROM departments d JOIN user_departments ud ON ud.department_id=d.id WHERE ud.user_id=$1 AND d.deleted_at IS NULL ORDER BY d.name`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +345,8 @@ func userScanDest(user *domain.User) []any {
 		&user.ID, &user.CreatedAt, &user.UpdatedAt, &user.DeletedAt,
 		&user.Email, &user.Name, &user.PasswordHash, &user.Active,
 		&user.Blocked, &user.BlockedReason, &user.Phone, &user.Title,
-		&user.AvatarURL, &user.LastLoginAt, &user.DepartmentID,
+		&user.AvatarURL, &user.LastLoginAt, &user.FailedLoginCount, &user.LockedUntil,
+		&user.TOTPSecret, &user.MFAEnabled, &user.EmailVerified, &user.DepartmentID,
 	}
 }
 

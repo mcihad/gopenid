@@ -65,10 +65,14 @@ func (s *Store) Seed(ctx context.Context, cfg config.Config) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO user_groups(user_id, group_id) VALUES($1,$2)`, userID, groupID); err != nil {
 		return err
 	}
+	secretHash, err := HashClientSecret("dotnet-secret")
+	if err != nil {
+		return err
+	}
 	var clientID, clientRoleID int64
-	if err := tx.QueryRow(ctx, `INSERT INTO clients(client_id, client_secret, name, description, home_url, logo_url, redirect_uris, token_ttl_seconds, refresh_ttl_seconds) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+	if err := tx.QueryRow(ctx, `INSERT INTO clients(client_id, client_secret, name, description, home_url, logo_url, redirect_uris, token_ttl_seconds, refresh_ttl_seconds, allow_password_grant) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
 		"gopen-dotnet",
-		"dotnet-secret",
+		secretHash,
 		"ASP.NET Core MVC Example",
 		"Örnek ASP.NET Core OIDC istemcisi",
 		"http://localhost:5048",
@@ -76,6 +80,7 @@ func (s *Store) Seed(ctx context.Context, cfg config.Config) error {
 		"http://localhost:5048/signin-oidc,https://localhost:7284/signin-oidc",
 		3600,
 		2592000,
+		true,
 	).Scan(&clientID); err != nil {
 		return err
 	}
@@ -96,7 +101,7 @@ func (s *Store) Seed(ctx context.Context, cfg config.Config) error {
 }
 
 func (s *Store) ListDepartments(ctx context.Context) ([]domain.Department, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT id, created_at, updated_at, deleted_at, name, description FROM departments WHERE deleted_at IS NULL ORDER BY name`)
+	rows, err := s.Pool.Query(ctx, `SELECT id, created_at, updated_at, deleted_at, name, description, parent_id FROM departments WHERE deleted_at IS NULL ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -114,19 +119,19 @@ func (s *Store) ListDepartments(ctx context.Context) ([]domain.Department, error
 
 func (s *Store) CreateDepartment(ctx context.Context, in domain.Department) (domain.Department, error) {
 	var row domain.Department
-	err := s.Pool.QueryRow(ctx, `INSERT INTO departments(name, description) VALUES($1,$2) RETURNING id, created_at, updated_at, deleted_at, name, description`, in.Name, in.Description).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description)
+	err := s.Pool.QueryRow(ctx, `INSERT INTO departments(name, description, parent_id) VALUES($1,$2,$3) RETURNING id, created_at, updated_at, deleted_at, name, description, parent_id`, in.Name, in.Description, in.ParentID).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description, &row.ParentID)
 	return row, err
 }
 
 func (s *Store) GetDepartment(ctx context.Context, id int64) (domain.Department, error) {
 	var row domain.Department
-	err := s.Pool.QueryRow(ctx, `SELECT id, created_at, updated_at, deleted_at, name, description FROM departments WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description)
+	err := s.Pool.QueryRow(ctx, `SELECT id, created_at, updated_at, deleted_at, name, description, parent_id FROM departments WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description, &row.ParentID)
 	return row, normalizeErr(err)
 }
 
 func (s *Store) UpdateDepartment(ctx context.Context, id int64, in domain.Department) (domain.Department, error) {
 	var row domain.Department
-	err := s.Pool.QueryRow(ctx, `UPDATE departments SET name=$2, description=$3, updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, created_at, updated_at, deleted_at, name, description`, id, in.Name, in.Description).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description)
+	err := s.Pool.QueryRow(ctx, `UPDATE departments SET name=$2, description=$3, parent_id=$4, updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING id, created_at, updated_at, deleted_at, name, description, parent_id`, id, in.Name, in.Description, in.ParentID).Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description, &row.ParentID)
 	return row, normalizeErr(err)
 }
 
@@ -183,7 +188,7 @@ func normalizeErr(err error) error {
 }
 
 func scanDepartment(rows pgx.Rows, row *domain.Department) error {
-	return rows.Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description)
+	return rows.Scan(&row.ID, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Name, &row.Description, &row.ParentID)
 }
 
 func scanRole(rows pgx.Rows, row *domain.Role) error {

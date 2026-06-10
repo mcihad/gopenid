@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"gopenid/internal/domain"
 	"gopenid/internal/httpx"
 
@@ -10,7 +9,7 @@ import (
 
 func (h *Handler) listRoles(c fiber.Ctx) error {
 	var rows []domain.Role
-	rows, err := h.db.ListRoles(context.Background())
+	rows, err := h.db.ListRoles(c.Context())
 	if err != nil {
 		return httpx.Error(c, 500, "list failed")
 	}
@@ -23,7 +22,7 @@ func (h *Handler) createRole(c fiber.Ctx) error {
 		return httpx.BadRequest(c, "name is required")
 	}
 	row := domain.Role{Name: req.Name, Description: req.Description}
-	row, err := h.db.CreateRole(context.Background(), row)
+	row, err := h.db.CreateRole(c.Context(), row)
 	if err != nil {
 		return httpx.BadRequest(c, "role already exists or invalid")
 	}
@@ -32,7 +31,7 @@ func (h *Handler) createRole(c fiber.Ctx) error {
 
 func (h *Handler) getRole(c fiber.Ctx) error {
 	var row domain.Role
-	row, err := h.db.GetRole(context.Background(), idParam(c))
+	row, err := h.db.GetRole(c.Context(), idParam(c))
 	if err != nil {
 		return httpx.NotFound(c)
 	}
@@ -41,7 +40,7 @@ func (h *Handler) getRole(c fiber.Ctx) error {
 
 func (h *Handler) updateRole(c fiber.Ctx) error {
 	var row domain.Role
-	row, err := h.db.GetRole(context.Background(), idParam(c))
+	row, err := h.db.GetRole(c.Context(), idParam(c))
 	if err != nil {
 		return httpx.NotFound(c)
 	}
@@ -50,7 +49,7 @@ func (h *Handler) updateRole(c fiber.Ctx) error {
 		return httpx.BadRequest(c, "name is required")
 	}
 	row.Name, row.Description = req.Name, req.Description
-	row, err = h.db.UpdateRole(context.Background(), row.ID, row)
+	row, err = h.db.UpdateRole(c.Context(), row.ID, row)
 	if err != nil {
 		return httpx.BadRequest(c, "role already exists or invalid")
 	}
@@ -58,7 +57,7 @@ func (h *Handler) updateRole(c fiber.Ctx) error {
 }
 
 func (h *Handler) deleteRole(c fiber.Ctx) error {
-	if err := h.db.DeleteRole(context.Background(), idParam(c)); err != nil {
+	if err := h.db.DeleteRole(c.Context(), idParam(c)); err != nil {
 		return httpx.Error(c, 500, "delete failed")
 	}
 	return c.SendStatus(204)

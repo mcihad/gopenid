@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -17,15 +18,15 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 func TestOpenIDFlows(t *testing.T) {
 	ctx := context.Background()
 	schema := fmt.Sprintf("auth_test_%d", time.Now().UnixNano())
-	cfg := testConfig(schema)
-	if !postgresAvailable(ctx, cfg) {
-		t.Skip("postgres is not available for integration tests")
-	}
+	cfg, cleanupPostgres := testConfigWithPostgres(t, ctx, schema)
+	defer cleanupPostgres()
 	app, db, err := Build(ctx, cfg)
 	if err != nil {
 		t.Fatalf("build app: %v", err)
@@ -44,6 +45,11 @@ func TestOpenIDFlows(t *testing.T) {
 	if len(jwks["keys"].([]any)) == 0 {
 		t.Fatal("jwks keys empty")
 	}
+	postJSON(t, app, "/api/admin/signing-keys/rotate", bearer(adminToken), nil, http.StatusOK)
+	rotatedJWKS := getJSON(t, app, "/.well-known/jwks.json", nil, http.StatusOK)
+	if len(rotatedJWKS["keys"].([]any)) < 2 {
+		t.Fatalf("jwks should expose rotated keys: %#v", rotatedJWKS)
+	}
 	doStatus(t, app, http.MethodGet, "/api/admin/users", bearer(adminToken), nil, http.StatusOK)
 	doStatus(t, app, http.MethodGet, "/api/admin/users", nil, nil, http.StatusUnauthorized)
 	userinfo := getJSON(t, app, "/oauth/userinfo", bearer(adminToken), http.StatusOK)
@@ -60,8 +66,8 @@ func TestOpenIDFlows(t *testing.T) {
 	}, http.StatusCreated)
 	doStatus(t, app, http.MethodDelete, fmt.Sprintf("/api/admin/roles/%d", int64(reusedRole["ID"].(float64))), bearer(adminToken), nil, http.StatusNoContent)
 
-	client := postJSON(t, app, "/api/admin/clients", bearer(adminToken), map[string]string{
-		"clientId": "web", "clientSecret": "secret", "name": "Web", "redirectUris": "http://localhost:3000/callback",
+	client := postJSON(t, app, "/api/admin/clients", bearer(adminToken), map[string]any{
+		"clientId": "web", "clientSecret": "secret", "name": "Web", "redirectUris": "http://localhost:3000/callback", "allowPasswordGrant": true,
 	}, http.StatusCreated)
 	clientDBID := int64(client["ID"].(float64))
 	tempClientRole := postJSON(t, app, fmt.Sprintf("/api/admin/clients/%d/roles", clientDBID), bearer(adminToken), map[string]string{
@@ -89,18 +95,51 @@ func TestOpenIDFlows(t *testing.T) {
 	assertJWTMissingClaim(t, withoutClientRoles, "client_roles")
 	assertJWTClaim(t, withoutClientRoles, "roles", []any{"admin"})
 
-	withClientRoles := tokenForm(t, app, url.Values{
+	withClientRolesBody := tokenResponse(t, app, url.Values{
 		"grant_type": {"password"}, "username": {"admin@gopenid.local"}, "password": {"admin12345"},
 		"client_id": {"web"}, "client_secret": {"secret"}, "scope": {"openid profile email roles client_roles"},
 	})
+	withClientRoles := stringField(t, withClientRolesBody, "access_token")
+	idToken := stringField(t, withClientRolesBody, "id_token")
 	assertJWTClaim(t, withClientRoles, "client_roles", []any{"reader"})
+	idClaims := jwtPayload(t, idToken)
+	if idClaims["at_hash"] != oidcTestHash(withClientRoles) || idClaims["auth_time"] == nil {
+		t.Fatalf("id_token missing at_hash/auth_time: %#v", idClaims)
+	}
 
 	code := authorizeCode(t, app)
-	codeToken := tokenForm(t, app, url.Values{
+	codeBody := tokenResponse(t, app, url.Values{
 		"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {"http://localhost:3000/callback"},
 		"client_id": {"web"}, "client_secret": {"secret"}, "code_verifier": {"plain-verifier"},
 	})
+	codeToken := stringField(t, codeBody, "access_token")
+	codeIDToken := stringField(t, codeBody, "id_token")
 	assertJWTClaim(t, codeToken, "client_roles", []any{"reader"})
+	if got := jwtPayload(t, codeIDToken)["c_hash"]; got != oidcTestHash(code) {
+		t.Fatalf("c_hash=%v want=%s", got, oidcTestHash(code))
+	}
+	_, ssoCookie := authorizeCodeWithSession(t, app)
+	ssoReq, _ := http.NewRequest(http.MethodGet, "/oauth/authorize?response_type=code&client_id=web&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=openid&state=sso", nil)
+	ssoReq.AddCookie(ssoCookie)
+	ssoRes, err := app.Test(ssoReq)
+	if err != nil {
+		t.Fatalf("sso authorize: %v", err)
+	}
+	_ = ssoRes.Body.Close()
+	if ssoRes.StatusCode != http.StatusFound && ssoRes.StatusCode != http.StatusSeeOther {
+		t.Fatalf("sso authorize status=%d", ssoRes.StatusCode)
+	}
+	doStatus(t, app, http.MethodGet, "/oauth/authorize?response_type=code&client_id=web&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=openid&prompt=none", nil, nil, http.StatusUnauthorized)
+	filteredToken := tokenForm(t, app, url.Values{
+		"grant_type": {"password"}, "username": {"admin@gopenid.local"}, "password": {"admin12345"},
+		"client_id": {"web"}, "client_secret": {"secret"}, "scope": {"openid"},
+	})
+	filteredUserinfo := getJSON(t, app, "/oauth/userinfo", bearer(filteredToken), http.StatusOK)
+	if _, ok := filteredUserinfo["email"]; ok {
+		t.Fatalf("userinfo should filter email without email scope: %#v", filteredUserinfo)
+	}
+	doStatus(t, app, http.MethodGet, "/oauth/logout?client_id=web&post_logout_redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback&state=bye", bearer(withClientRoles), nil, http.StatusSeeOther)
+	doStatus(t, app, http.MethodGet, "/oauth/userinfo", bearer(withClientRoles), nil, http.StatusUnauthorized)
 }
 
 func testConfig(schema string) config.Config {
@@ -110,6 +149,31 @@ func testConfig(schema string) config.Config {
 	cfg.AdminEmail = "admin@gopenid.local"
 	cfg.AdminPass = "admin12345"
 	return cfg
+}
+
+func testConfigWithPostgres(t *testing.T, ctx context.Context, schema string) (config.Config, func()) {
+	t.Helper()
+	cfg := testConfig(schema)
+	if postgresAvailable(ctx, cfg) {
+		return cfg, func() {}
+	}
+	ctr, err := postgres.Run(ctx,
+		"postgres:18-alpine",
+		postgres.WithDatabase("postgres"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		postgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		t.Fatalf("start postgres testcontainer: %v", err)
+	}
+	conn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		testcontainers.CleanupContainer(t, ctr)
+		t.Fatalf("postgres connection string: %v", err)
+	}
+	cfg.Database.URL = conn
+	return cfg, func() { testcontainers.CleanupContainer(t, ctr) }
 }
 
 func postgresAvailable(ctx context.Context, cfg config.Config) bool {
@@ -196,11 +260,22 @@ func doStatus(t *testing.T, app *fiber.App, method string, path string, headers 
 
 func tokenForm(t *testing.T, app *fiber.App, values url.Values) string {
 	t.Helper()
-	body := doJSON(t, app, http.MethodPost, "/oauth/token", nil, "application/x-www-form-urlencoded", strings.NewReader(values.Encode()), http.StatusOK)
+	body := tokenResponse(t, app, values)
 	return stringField(t, body, "access_token")
 }
 
+func tokenResponse(t *testing.T, app *fiber.App, values url.Values) map[string]any {
+	t.Helper()
+	return doJSON(t, app, http.MethodPost, "/oauth/token", nil, "application/x-www-form-urlencoded", strings.NewReader(values.Encode()), http.StatusOK)
+}
+
 func authorizeCode(t *testing.T, app *fiber.App) string {
+	t.Helper()
+	code, _ := authorizeCodeWithSession(t, app)
+	return code
+}
+
+func authorizeCodeWithSession(t *testing.T, app *fiber.App) (string, *http.Cookie) {
 	t.Helper()
 	values := url.Values{
 		"email": {"admin@gopenid.local"}, "password": {"admin12345"},
@@ -224,7 +299,16 @@ func authorizeCode(t *testing.T, app *fiber.App) string {
 	if err != nil {
 		t.Fatalf("parse redirect: %v", err)
 	}
-	return u.Query().Get("code")
+	var sessionCookie *http.Cookie
+	for _, cookie := range res.Cookies() {
+		if cookie.Name == "gopenid_sso" {
+			sessionCookie = cookie
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("missing sso cookie")
+	}
+	return u.Query().Get("code"), sessionCookie
 }
 
 func bearer(token string) map[string]string {
@@ -275,4 +359,9 @@ func jwtPayload(t *testing.T, token string) map[string]any {
 		t.Fatalf("unmarshal jwt payload: %v", err)
 	}
 	return out
+}
+
+func oidcTestHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2])
 }

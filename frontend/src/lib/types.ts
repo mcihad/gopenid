@@ -7,6 +7,8 @@ export type Base = {
 export type Department = Base & {
   name: string
   description: string
+  parentId?: number | null
+  children?: Department[]
 }
 
 export type Role = Base & {
@@ -28,6 +30,7 @@ export type ClientRole = Base & {
 export type Client = Base & {
   clientId: string
   clientSecret: string
+  hasClientSecret: boolean
   name: string
   description: string
   homeUrl: string
@@ -35,6 +38,7 @@ export type Client = Base & {
   redirectUris: string
   tokenTtlSeconds: number
   refreshTtlSeconds: number
+  allowPasswordGrant: boolean
   roles?: ClientRole[]
 }
 
@@ -48,6 +52,7 @@ export type User = Base & {
   title: string
   avatarUrl: string
   lastLoginAt?: string | null
+  mfaEnabled?: boolean
   departmentId?: number
   department?: Department
   departments?: Department[]
@@ -90,6 +95,13 @@ export type AuditLog = Base & {
   device: string
   browser: string
   os: string
+}
+
+export type AuditLogPage = {
+  items: AuditLog[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 export type SessionInfo = Base & {

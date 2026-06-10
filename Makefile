@@ -78,6 +78,10 @@ build-backend: build-frontend ## Go binary'sini derle (frontend gömülü)
 	go build -o $(BINARY) $(PKG)
 	@echo "Derlendi: $(BINARY)"
 
+.PHONY: docker
+docker: ## Docker imajı oluştur
+	docker build -t gopenid:latest .
+
 .PHONY: run
 run: build-frontend ## Üretim modunda çalıştır (frontend derlenip Go ile sunulur)
 	go run $(PKG)

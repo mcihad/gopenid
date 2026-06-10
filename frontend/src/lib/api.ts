@@ -1,5 +1,5 @@
 import type {
-  AuditLog,
+  AuditLogPage,
   Client,
   ClientRole,
   Department,
@@ -62,10 +62,13 @@ export const auth = {
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   const guarded = url.startsWith('/api/admin') || url.startsWith('/api/me')
   if (guarded && !auth.isTokenValid()) {
-    auth.clear()
-    throw new Error('Oturum süresi doldu. Lütfen tekrar giriş yapın.')
+    const refreshed = await refreshAccessToken()
+    if (!refreshed) {
+      auth.clear()
+      throw new Error('Oturum süresi doldu. Lütfen tekrar giriş yapın.')
+    }
   }
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -73,10 +76,45 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
       ...init.headers,
     },
   })
+  if (res.status === 401 && guarded && await refreshAccessToken()) {
+    res = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${auth.token}`,
+        ...init.headers,
+      },
+    })
+  }
   if (res.status === 401) auth.clear()
-  if (!res.ok) throw new Error(extractError(await res.text()) || res.statusText)
+  if (!res.ok) {
+    const message = extractError(await res.text()) || res.statusText
+    toast(message, 'error')
+    throw new Error(message)
+  }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
+}
+
+function toast(message: string, type: 'error' | 'info' | 'success' = 'info') {
+  window.dispatchEvent(new CustomEvent('gopenid:toast', { detail: { message, type } }))
+}
+
+async function refreshAccessToken() {
+  if (!auth.refreshToken) return false
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: auth.refreshToken }),
+    })
+    if (!res.ok) return false
+    const data = await res.json() as { access_token: string; refresh_token?: string }
+    auth.set(data.access_token, data.refresh_token)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function extractError(body: string): string {
@@ -88,10 +126,10 @@ function extractError(body: string): string {
   }
 }
 
-export async function login(email: string, password: string) {
+export async function login(email: string, password: string, totpCode?: string) {
   const data = await request<{ access_token: string; refresh_token: string; user: SessionUser }>(
     '/api/auth/login',
-    { method: 'POST', body: JSON.stringify({ email, password }) },
+    { method: 'POST', body: JSON.stringify({ email, password, totpCode }) },
   )
   auth.set(data.access_token, data.refresh_token, data.user)
 }
@@ -104,12 +142,26 @@ export async function logout() {
   }
 }
 
+export const account = {
+  requestPasswordReset: (email: string) =>
+    request<{ message: string; resetToken?: string }>('/api/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email }) }),
+  confirmPasswordReset: (token: string, newPassword: string) =>
+    request<{ message: string }>('/api/auth/password-reset/confirm', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
+  requestEmailVerification: (email: string) =>
+    request<{ message: string; verificationToken?: string }>('/api/auth/email-verification/request', { method: 'POST', body: JSON.stringify({ email }) }),
+  confirmEmailVerification: (token: string) =>
+    request<{ message: string }>('/api/auth/email-verification/confirm', { method: 'POST', body: JSON.stringify({ token }) }),
+}
+
 export const me = {
   profile: () => request<User>('/api/me'),
   update: (body: { name: string; phone: string; title: string; avatarUrl: string }) =>
     request<User>('/api/me', { method: 'PUT', body: JSON.stringify(body) }),
   changePassword: (body: { currentPassword: string; newPassword: string }) =>
     request<{ message: string }>('/api/me/password', { method: 'POST', body: JSON.stringify(body) }),
+  setupMFA: () => request<{ secret: string; otpauthUrl: string; enabled: boolean }>('/api/me/mfa/setup', { method: 'POST' }),
+  enableMFA: (code: string) => request<{ message: string }>('/api/me/mfa/enable', { method: 'POST', body: JSON.stringify({ code }) }),
+  disableMFA: () => request<{ message: string }>('/api/me/mfa/disable', { method: 'POST' }),
   roles: () => request<Role[]>('/api/me/roles'),
   departments: () => request<Department[]>('/api/me/departments'),
   groups: () => request<Group[]>('/api/me/groups'),
@@ -167,12 +219,19 @@ export const api = {
         }),
     },
   },
-  auditLogs: (params: { userId?: number; event?: string; limit?: number } = {}) => {
+  auditLogs: (params: { userId?: number; event?: string; email?: string; clientId?: string; ip?: string; success?: boolean; from?: string; to?: string; page?: number; pageSize?: number; limit?: number } = {}) => {
     const query = new URLSearchParams()
     if (params.userId) query.set('userId', String(params.userId))
     if (params.event) query.set('event', params.event)
-    query.set('limit', String(params.limit ?? 100))
-    return request<AuditLog[]>(`/api/admin/audit-logs?${query.toString()}`)
+    if (params.email) query.set('email', params.email)
+    if (params.clientId) query.set('clientId', params.clientId)
+    if (params.ip) query.set('ip', params.ip)
+    if (typeof params.success === 'boolean') query.set('success', String(params.success))
+    if (params.from) query.set('from', params.from)
+    if (params.to) query.set('to', params.to)
+    if (params.page) query.set('page', String(params.page))
+    query.set('pageSize', String(params.pageSize ?? params.limit ?? 100))
+    return request<AuditLogPage>(`/api/admin/audit-logs?${query.toString()}`)
   },
 }
 

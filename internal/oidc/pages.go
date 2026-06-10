@@ -55,6 +55,12 @@ func renderLoginPage(p loginPage) string {
             <input type="password" name="password" placeholder="••••••••" required />
           </div>
         </div>
+        <div class="form-group">
+          <label>Doğrulama kodu</label>
+          <div class="input-container">
+            <input type="text" name="totp_code" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" />
+          </div>
+        </div>
         <button type="submit" class="btn-primary">
           <span>Giriş yap</span>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">

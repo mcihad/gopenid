@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Ban, Plus, ShieldCheck } from 'lucide-react'
 import { api } from '../lib/api'
@@ -36,6 +36,8 @@ export function UsersPage() {
   const [draft, setDraft] = useState<UserDraft>(userDraft())
   const [searchQuery, setSearchQuery] = useState('')
   const [modalTab, setModalTab] = useState<UserModalTab>('general')
+  const [selectedClientID, setSelectedClientID] = useState<number | ''>('')
+  const [clientRoleSearch, setClientRoleSearch] = useState('')
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['users'] })
 
@@ -62,9 +64,20 @@ export function UsersPage() {
     )
   }, [users.data, searchQuery])
 
-  const openCreateModal = () => { setEdit(null); setDraft(userDraft()); save.reset(); setModalTab('general'); setIsModalOpen(true) }
-  const openEditModal = (user: User) => { setEdit(user); setDraft(fromUser(user)); save.reset(); setModalTab('general'); setIsModalOpen(true) }
-  const closeModal = () => { setIsModalOpen(false); setEdit(null); setDraft(userDraft()) }
+  const openCreateModal = () => { setEdit(null); setDraft(userDraft()); save.reset(); setModalTab('general'); setSelectedClientID(''); setClientRoleSearch(''); setIsModalOpen(true) }
+  const openEditModal = (user: User) => { setEdit(user); setDraft(fromUser(user)); save.reset(); setModalTab('general'); setSelectedClientID(user.authorizedClients?.[0]?.ID ?? ''); setClientRoleSearch(''); setIsModalOpen(true) }
+  const closeModal = () => { setIsModalOpen(false); setEdit(null); setDraft(userDraft()); setSelectedClientID(''); setClientRoleSearch('') }
+
+  useEffect(() => {
+    if (selectedClientID === '' && draft.clientIds.length > 0) setSelectedClientID(draft.clientIds[0])
+    if (selectedClientID !== '' && !draft.clientIds.includes(selectedClientID)) setSelectedClientID(draft.clientIds[0] ?? '')
+  }, [draft.clientIds, selectedClientID])
+
+  const selectedClient = clients.data?.find((client) => client.ID === selectedClientID)
+  const selectedClientRoles = useMemo(() => {
+    const q = lower(clientRoleSearch)
+    return (selectedClient?.roles ?? []).filter((role) => lower(role.name).includes(q) || lower(role.description).includes(q))
+  }, [clientRoleSearch, selectedClient])
 
   return (
     <div className="directory-section">
@@ -154,21 +167,31 @@ export function UsersPage() {
 
             {modalTab === 'clients' && (
               <div className="modal-form">
-                <Picker title="Yetkili clientlar" empty="Önce Clientlar bölümünden client ekleyin." items={clients.data ?? []} selectedIDs={draft.clientIds} label={(client) => `${client.name} (${client.clientId})`} onToggle={(id) => setDraft(toggleClient(draft, id, clients.data ?? []))} />
-                {draft.clientIds.length > 0 && (
-                  <div className="form-group">
-                    <label>Client rolleri</label>
-                    <div className="roles-grid expanded">
-                      {clients.data?.filter((client) => draft.clientIds.includes(client.ID)).map((client) => (
-                        <div className="client-role-group" key={client.ID}>
-                          <strong>{client.name} <span className="mono-text">{client.clientId}</span></strong>
-                          {(client.roles?.length ?? 0) === 0 ? <Muted>Bu client için rol yok.</Muted> : client.roles?.map((role) => (
-                            <CheckRow key={role.ID} selected={draft.clientRoleIds.includes(role.ID)} label={role.name} onClick={() => setDraft(toggleID(draft, 'clientRoleIds', role.ID))} />
-                          ))}
-                        </div>
-                      ))}
+                <Field label="Uygulama">
+                  <select value={selectedClientID} onChange={(event) => { setSelectedClientID(event.target.value ? Number(event.target.value) : ''); setClientRoleSearch('') }}>
+                    <option value="">Uygulama seçin</option>
+                    {clients.data?.map((client) => <option key={client.ID} value={client.ID}>{client.name} ({client.clientId})</option>)}
+                  </select>
+                </Field>
+                {!clients.data?.length && <Muted>Önce Clientlar bölümünden client ekleyin.</Muted>}
+                {selectedClient && (
+                  <>
+                    <label className="checkbox-group">
+                      <input type="checkbox" checked={draft.clientIds.includes(selectedClient.ID)} onChange={() => setDraft(toggleClient(draft, selectedClient.ID, clients.data ?? []))} />
+                      {selectedClient.name} için kullanıcı erişimi
+                    </label>
+                    <div className="form-group">
+                      <label>Client rolleri</label>
+                      <SearchInput value={clientRoleSearch} onChange={setClientRoleSearch} placeholder={`${selectedClient.name} rolleri içinde ara...`} />
+                      <div className="roles-grid expanded">
+                        {(selectedClient.roles?.length ?? 0) === 0 && <Muted>Bu client için rol yok.</Muted>}
+                        {(selectedClient.roles?.length ?? 0) > 0 && selectedClientRoles.length === 0 && <Muted>Arama ile eşleşen rol yok.</Muted>}
+                        {selectedClientRoles.map((role) => (
+                          <CheckRow key={role.ID} selected={draft.clientRoleIds.includes(role.ID)} label={`${role.name}${role.description ? ` (${role.description})` : ''}`} onClick={() => setDraft(toggleClientRole(draft, selectedClient.ID, role.ID))} />
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  </>
                 )}
               </div>
             )}
@@ -221,5 +244,11 @@ function toggleClient(draft: UserDraft, id: number, clients: Client[]): UserDraf
   if (draft.clientIds.includes(id) && client?.roles?.length) {
     next.clientRoleIds = next.clientRoleIds.filter((roleID) => !client.roles?.some((role) => role.ID === roleID))
   }
+  return next
+}
+
+function toggleClientRole(draft: UserDraft, clientID: number, roleID: number): UserDraft {
+  const next = toggleID(draft, 'clientRoleIds', roleID)
+  if (!next.clientIds.includes(clientID)) next.clientIds = [...next.clientIds, clientID]
   return next
 }

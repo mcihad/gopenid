@@ -4,8 +4,12 @@
 package audit
 
 import (
-	"context"
+	"bytes"
+	"encoding/json"
+	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 
 	"gopenid/internal/domain"
 	"gopenid/internal/store"
@@ -14,11 +18,16 @@ import (
 )
 
 type Recorder struct {
-	db *store.Store
+	db         *store.Store
+	webhookURL string
 }
 
-func New(db *store.Store) *Recorder {
-	return &Recorder{db: db}
+func New(db *store.Store, webhookURL ...string) *Recorder {
+	r := &Recorder{db: db}
+	if len(webhookURL) > 0 {
+		r.webhookURL = webhookURL[0]
+	}
+	return r
 }
 
 // Entry describes a single auditable event.
@@ -39,7 +48,7 @@ func (r *Recorder) Record(c fiber.Ctx, e Entry) {
 	}
 	ip, ua := RequestContext(c)
 	device, browser, os := ParseUserAgent(ua)
-	_ = r.db.WriteAudit(context.Background(), domain.AuditLog{
+	row := domain.AuditLog{
 		UserID:    e.UserID,
 		Email:     e.Email,
 		ClientID:  e.ClientID,
@@ -51,21 +60,37 @@ func (r *Recorder) Record(c fiber.Ctx, e Entry) {
 		Device:    device,
 		Browser:   browser,
 		OS:        os,
-	})
+	}
+	_ = r.db.WriteAudit(c.Context(), row)
+	r.publish(row)
 }
 
-// RequestContext extracts the client IP (honoring common proxy headers) and the
-// User-Agent string from a request.
+func (r *Recorder) publish(row domain.AuditLog) {
+	if r.webhookURL == "" {
+		return
+	}
+	go func() {
+		body, err := json.Marshal(row)
+		if err != nil {
+			return
+		}
+		client := &http.Client{Timeout: 2 * time.Second}
+		resp, err := client.Post(r.webhookURL, "application/json", bytes.NewReader(body))
+		if err != nil {
+			slog.Warn("audit webhook failed", "error", err)
+			return
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			slog.Warn("audit webhook returned non-success", "status", resp.StatusCode)
+		}
+	}()
+}
+
+// RequestContext extracts the client IP and User-Agent string from a request.
+// Fiber applies trusted-proxy validation before c.IP() honors proxy headers.
 func RequestContext(c fiber.Ctx) (ip string, userAgent string) {
-	userAgent = c.Get("User-Agent")
-	if fwd := c.Get("X-Forwarded-For"); fwd != "" {
-		ip = strings.TrimSpace(strings.Split(fwd, ",")[0])
-		return ip, userAgent
-	}
-	if real := c.Get("X-Real-IP"); real != "" {
-		return strings.TrimSpace(real), userAgent
-	}
-	return c.IP(), userAgent
+	return c.IP(), c.Get("User-Agent")
 }
 
 // ParseUserAgent performs a lightweight, dependency-free classification of a

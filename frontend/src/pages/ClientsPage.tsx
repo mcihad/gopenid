@@ -4,7 +4,7 @@ import { Copy, Plus, Shuffle } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ClientRole } from '../lib/types'
 import { Actions, Alert, ControlBar, EmptySearch, Field, Modal, ModalFooter, Muted, PageHeader, SearchInput, TableState } from '../components/ui'
-import { lower, maskSecret, randomSecret } from '../lib/format'
+import { lower, randomSecret } from '../lib/format'
 
 type ClientModalTab = 'general' | 'security' | 'roles'
 
@@ -18,6 +18,7 @@ type ClientDraft = {
   redirectUris: string
   tokenTtlSeconds: number
   refreshTtlSeconds: number
+  allowPasswordGrant: boolean
 }
 
 export function ClientsPage() {
@@ -97,7 +98,7 @@ export function ClientsPage() {
                     </div>
                   </td>
                   <td className="mono-text">{client.clientId}</td>
-                  <td className="mono-text secret-preview">{maskSecret(client.clientSecret)}</td>
+                  <td className="mono-text secret-preview">{client.hasClientSecret ? 'Hashlenmiş secret' : 'Yok'}</td>
                   <td>{formatDuration(client.tokenTtlSeconds)} / {formatDuration(client.refreshTtlSeconds)}</td>
                   <td>{client.roles?.length ?? 0}</td>
                   <td>{getUserCount(client.ID)}</td>
@@ -149,7 +150,7 @@ export function ClientsPage() {
                         <p>Secret sadece güvenilir backend clientları tarafından kullanılmalı.</p>
                       </div>
                       <div className="secret-row">
-                        <input className="mono-input" value={draft.clientSecret} onChange={(event) => setDraft({ ...draft, clientSecret: event.target.value })} required />
+                        <input className="mono-input" value={draft.clientSecret} onChange={(event) => setDraft({ ...draft, clientSecret: event.target.value })} placeholder={edit ? 'Değişmeyecekse boş bırakın' : undefined} required={!edit} />
                         <button type="button" className="btn-tertiary" onClick={() => setDraft({ ...draft, clientSecret: randomSecret() })}><Shuffle size={14} />Üret</button>
                         <button type="button" className="btn-secondary" onClick={copySecret} disabled={!draft.clientSecret}><Copy size={14} />{copied ? 'Kopyalandı' : 'Kopyala'}</button>
                       </div>
@@ -158,6 +159,7 @@ export function ClientsPage() {
                       <Field label="Token (oturum) ömrü — dakika" hint="0 = sunucu varsayılanı"><input type="number" min={0} value={Math.round(draft.tokenTtlSeconds / 60)} onChange={(event) => setDraft({ ...draft, tokenTtlSeconds: Number(event.target.value) * 60 })} /></Field>
                       <Field label="Yenileme (refresh) ömrü — dakika" hint="0 = sunucu varsayılanı"><input type="number" min={0} value={Math.round(draft.refreshTtlSeconds / 60)} onChange={(event) => setDraft({ ...draft, refreshTtlSeconds: Number(event.target.value) * 60 })} /></Field>
                     </div>
+                    <label className="checkbox-group"><input type="checkbox" checked={draft.allowPasswordGrant} onChange={(event) => setDraft({ ...draft, allowPasswordGrant: event.target.checked })} />Password grant izinli</label>
                   </>
                 )}
               </div>
@@ -216,13 +218,13 @@ export function ClientsPage() {
 }
 
 function clientDraft(): ClientDraft {
-  return { clientId: '', clientSecret: randomSecret(), name: '', description: '', homeUrl: '', logoUrl: '', redirectUris: '', tokenTtlSeconds: 0, refreshTtlSeconds: 0 }
+  return { clientId: '', clientSecret: randomSecret(), name: '', description: '', homeUrl: '', logoUrl: '', redirectUris: '', tokenTtlSeconds: 0, refreshTtlSeconds: 0, allowPasswordGrant: false }
 }
 
 function fromClient(client: Client): ClientDraft {
   return {
     clientId: client.clientId,
-    clientSecret: client.clientSecret,
+    clientSecret: '',
     name: client.name,
     description: client.description ?? '',
     homeUrl: client.homeUrl ?? '',
@@ -230,6 +232,7 @@ function fromClient(client: Client): ClientDraft {
     redirectUris: client.redirectUris,
     tokenTtlSeconds: client.tokenTtlSeconds ?? 0,
     refreshTtlSeconds: client.refreshTtlSeconds ?? 0,
+    allowPasswordGrant: client.allowPasswordGrant ?? false,
   }
 }
 

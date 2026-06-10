@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import { router } from './router'
+import { ErrorBoundary, ToastHost } from './components/Feedback'
 import './style.css'
 
 const client = new QueryClient({
@@ -19,9 +20,11 @@ window.addEventListener('gopenid:logout', () => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+        <ToastHost />
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )
-

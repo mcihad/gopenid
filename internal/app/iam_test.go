@@ -20,16 +20,18 @@ import (
 func TestIAMFeatures(t *testing.T) {
 	ctx := context.Background()
 	schema := fmt.Sprintf("auth_iam_%d", time.Now().UnixNano())
-	cfg := testConfig(schema)
-	if !postgresAvailable(ctx, cfg) {
-		t.Skip("postgres is not available for integration tests")
-	}
+	cfg, cleanupPostgres := testConfigWithPostgres(t, ctx, schema)
+	defer cleanupPostgres()
 	app, db, err := Build(ctx, cfg)
 	if err != nil {
 		t.Fatalf("build app: %v", err)
 	}
 	defer db.Pool.Close()
 	defer dropSchema(ctx, t, cfg)
+
+	doStatus(t, app, http.MethodGet, "/healthz", nil, nil, http.StatusOK)
+	doStatus(t, app, http.MethodGet, "/readyz", nil, nil, http.StatusOK)
+	doStatus(t, app, http.MethodGet, "/metrics", nil, nil, http.StatusOK)
 
 	adminCreds := map[string]string{"email": "admin@gopenid.local", "password": "admin12345"}
 
@@ -85,11 +87,25 @@ func TestIAMFeatures(t *testing.T) {
 	// --- Password self-service ------------------------------------------------
 	workerLogin := postJSON(t, app, "/api/auth/login", nil, workerCreds, http.StatusOK)
 	workerToken := stringField(t, workerLogin, "access_token")
+	doStatus(t, app, http.MethodGet, "/api/admin/users", bearer(workerToken), nil, http.StatusForbidden)
 	postJSON(t, app, "/api/me/password", bearer(workerToken), map[string]string{
 		"currentPassword": "worker12345", "newPassword": "worker54321",
 	}, http.StatusOK)
 	postJSON(t, app, "/api/auth/login", nil, workerCreds, http.StatusUnauthorized)
 	postJSON(t, app, "/api/auth/login", nil, map[string]string{"email": "worker@gopenid.local", "password": "worker54321"}, http.StatusOK)
+
+	resetReq := postJSON(t, app, "/api/auth/password-reset/request", nil, map[string]string{"email": "worker@gopenid.local"}, http.StatusOK)
+	resetToken := stringField(t, resetReq, "resetToken")
+	postJSON(t, app, "/api/auth/password-reset/confirm", nil, map[string]string{"token": resetToken, "newPassword": "worker67890"}, http.StatusOK)
+	postJSON(t, app, "/api/auth/login", nil, map[string]string{"email": "worker@gopenid.local", "password": "worker54321"}, http.StatusUnauthorized)
+	postJSON(t, app, "/api/auth/login", nil, map[string]string{"email": "worker@gopenid.local", "password": "worker67890"}, http.StatusOK)
+	verifyReq := postJSON(t, app, "/api/auth/email-verification/request", nil, map[string]string{"email": "worker@gopenid.local"}, http.StatusOK)
+	verifyToken := stringField(t, verifyReq, "verificationToken")
+	postJSON(t, app, "/api/auth/email-verification/confirm", nil, map[string]string{"token": verifyToken}, http.StatusOK)
+	workerVerified := getJSON(t, app, fmt.Sprintf("/api/admin/users/%d", workerID), bearer(adminToken), http.StatusOK)
+	if workerVerified["emailVerified"] != true {
+		t.Fatalf("worker email should be verified: %#v", workerVerified)
+	}
 
 	// --- Groups + multiple departments ---------------------------------------
 	group := postJSON(t, app, "/api/admin/groups", bearer(adminToken), map[string]string{"name": "operators", "description": "Ops"}, http.StatusCreated)
@@ -113,11 +129,23 @@ func TestIAMFeatures(t *testing.T) {
 	client := postJSON(t, app, "/api/admin/clients", bearer(adminToken), map[string]any{
 		"clientId": "portal", "clientSecret": "portal-secret", "name": "Portal",
 		"redirectUris": "http://localhost:3000/callback", "homeUrl": "http://localhost:3000", "tokenTtlSeconds": 3600,
+		"allowPasswordGrant": true,
 	}, http.StatusCreated)
+	if client["clientSecret"] != "portal-secret" {
+		t.Fatalf("new client should return secret once, got %#v", client["clientSecret"])
+	}
 	clientDBID := int64(client["ID"].(float64))
+	for _, item := range getArray(t, app, "/api/admin/clients", bearer(adminToken), http.StatusOK) {
+		row := item.(map[string]any)
+		if row["clientId"] == "portal" {
+			if _, ok := row["clientSecret"]; ok {
+				t.Fatalf("client list must not return secret: %#v", row)
+			}
+		}
+	}
 
 	tokenValues := url.Values{
-		"grant_type": {"password"}, "username": {"worker@gopenid.local"}, "password": {"worker54321"},
+		"grant_type": {"password"}, "username": {"worker@gopenid.local"}, "password": {"worker67890"},
 		"client_id": {"portal"}, "client_secret": {"portal-secret"}, "scope": {"openid profile"},
 	}
 	// Not authorized for this client yet -> forbidden.
@@ -161,18 +189,34 @@ func TestIAMFeatures(t *testing.T) {
 	postJSON(t, app, fmt.Sprintf("/api/admin/policies/%d/assignments", ipDenyID), bearer(adminToken), map[string]any{
 		"subjectType": "user", "subjectId": workerID,
 	}, http.StatusCreated)
-	// Request from a blocked IP is denied; user allow remains but deny wins at
-	// the same (user) level.
-	formStatusWithHeaders(t, app, "/oauth/token", tokenValues, map[string]string{"X-Forwarded-For": "203.0.113.10"}, http.StatusForbidden)
+	// Spoofed forwarding headers are ignored unless the proxy is trusted.
+	formStatusWithHeaders(t, app, "/oauth/token", tokenValues, map[string]string{"X-Forwarded-For": "203.0.113.10"}, http.StatusOK)
 
 	// --- Audit logging --------------------------------------------------------
-	logs := getArray(t, app, "/api/admin/audit-logs?limit=100", bearer(adminToken), http.StatusOK)
+	auditPage := getJSON(t, app, "/api/admin/audit-logs?pageSize=100", bearer(adminToken), http.StatusOK)
+	logs := auditPage["items"].([]any)
 	if len(logs) == 0 {
 		t.Fatal("expected audit logs to be recorded")
 	}
 	if !auditHasEvent(logs, "login") || !auditHasEvent(logs, "access_denied") {
 		t.Fatalf("expected login and access_denied audit events, got %d entries", len(logs))
 	}
+	if !auditHasEvent(logs, "logout") {
+		t.Fatalf("expected logout audit event, got %d entries", len(logs))
+	}
+	firstPage := getJSON(t, app, "/api/admin/audit-logs?page=1&pageSize=2&event=login", bearer(adminToken), http.StatusOK)
+	if int(firstPage["pageSize"].(float64)) != 2 || len(firstPage["items"].([]any)) > 2 || firstPage["total"].(float64) < 1 {
+		t.Fatalf("audit pagination response invalid: %#v", firstPage)
+	}
+
+	locked := postJSON(t, app, "/api/admin/users", bearer(adminToken), map[string]any{
+		"email": "locked@gopenid.local", "name": "Locked", "password": "locked12345", "active": true,
+	}, http.StatusCreated)
+	_ = locked
+	for range 5 {
+		postJSON(t, app, "/api/auth/login", nil, map[string]string{"email": "locked@gopenid.local", "password": "bad"}, http.StatusUnauthorized)
+	}
+	postJSON(t, app, "/api/auth/login", nil, map[string]string{"email": "locked@gopenid.local", "password": "locked12345"}, http.StatusUnauthorized)
 }
 
 // --- Test helpers ------------------------------------------------------------

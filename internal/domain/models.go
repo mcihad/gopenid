@@ -11,8 +11,10 @@ type Base struct {
 
 type Department struct {
 	Base
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	ParentID    *int64       `json:"parentId"`
+	Children    []Department `json:"children,omitempty"`
 }
 
 type Role struct {
@@ -39,6 +41,11 @@ type User struct {
 	Title             string       `json:"title"`
 	AvatarURL         string       `json:"avatarUrl"`
 	LastLoginAt       *time.Time   `json:"lastLoginAt"`
+	FailedLoginCount  int          `json:"failedLoginCount"`
+	LockedUntil       *time.Time   `json:"lockedUntil"`
+	TOTPSecret        string       `json:"-"`
+	MFAEnabled        bool         `json:"mfaEnabled"`
+	EmailVerified     bool         `json:"emailVerified"`
 	DepartmentID      *int64       `json:"departmentId"`
 	Department        Department   `json:"department"`
 	Departments       []Department `json:"departments"`
@@ -63,16 +70,19 @@ type AuthCode struct {
 
 type Client struct {
 	Base
-	ClientID          string       `json:"clientId"`
-	ClientSecret      string       `json:"clientSecret"`
-	Name              string       `json:"name"`
-	Description       string       `json:"description"`
-	HomeURL           string       `json:"homeUrl"`
-	LogoURL           string       `json:"logoUrl"`
-	RedirectURIs      string       `json:"redirectUris"`
-	TokenTTLSeconds   int          `json:"tokenTtlSeconds"`
-	RefreshTTLSeconds int          `json:"refreshTtlSeconds"`
-	Roles             []ClientRole `json:"roles"`
+	ClientID           string       `json:"clientId"`
+	ClientSecret       string       `json:"-"`
+	ClientSecretPlain  string       `json:"clientSecret,omitempty"`
+	HasClientSecret    bool         `json:"hasClientSecret"`
+	Name               string       `json:"name"`
+	Description        string       `json:"description"`
+	HomeURL            string       `json:"homeUrl"`
+	LogoURL            string       `json:"logoUrl"`
+	RedirectURIs       string       `json:"redirectUris"`
+	TokenTTLSeconds    int          `json:"tokenTtlSeconds"`
+	RefreshTTLSeconds  int          `json:"refreshTtlSeconds"`
+	AllowPasswordGrant bool         `json:"allowPasswordGrant"`
+	Roles              []ClientRole `json:"roles"`
 }
 
 type ClientRole struct {
@@ -158,6 +168,24 @@ type RevokedToken struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+type AccountToken struct {
+	Base
+	UserID    int64      `json:"userId"`
+	TokenHash string     `json:"-"`
+	Type      string     `json:"type"`
+	ExpiresAt time.Time  `json:"expiresAt"`
+	UsedAt    *time.Time `json:"usedAt"`
+}
+
+type BrowserSession struct {
+	Base
+	TokenHash string    `json:"-"`
+	UserID    int64     `json:"userId"`
+	AuthTime  time.Time `json:"authTime"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	Revoked   bool      `json:"revoked"`
+}
+
 // AuditLog records authentication lifecycle events.
 type AuditLog struct {
 	Base
@@ -176,10 +204,12 @@ type AuditLog struct {
 
 // Audit event names.
 const (
-	EventLogin        = "login"
-	EventLoginFailed  = "login_failed"
-	EventLogout       = "logout"
-	EventTokenRefresh = "token_refresh"
-	EventTokenRevoke  = "token_revoke"
-	EventAccessDenied = "access_denied"
+	EventLogin         = "login"
+	EventLoginFailed   = "login_failed"
+	EventLogout        = "logout"
+	EventTokenRefresh  = "token_refresh"
+	EventTokenRevoke   = "token_revoke"
+	EventAccessDenied  = "access_denied"
+	EventUserBlocked   = "user_blocked"
+	EventUserUnblocked = "user_unblocked"
 )

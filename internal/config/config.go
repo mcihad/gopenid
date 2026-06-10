@@ -23,9 +23,12 @@ type Config struct {
 	AdminEmail string
 	AdminPass  string
 
-	RateLimitMax    int
-	RateLimitWindow time.Duration
-	CleanupInterval time.Duration
+	RateLimitMax     int
+	RateLimitWindow  time.Duration
+	CleanupInterval  time.Duration
+	MaxLoginFailures int
+	LoginLockout     time.Duration
+	WebhookURL       string
 }
 
 type Database struct {
@@ -63,9 +66,12 @@ func Load() Config {
 		AdminEmail: env("GOPENID_ADMIN_EMAIL", "admin@gopenid.local"),
 		AdminPass:  env("GOPENID_ADMIN_PASS", "admin12345"),
 
-		RateLimitMax:    envInt("GOPENID_RATE_LIMIT_MAX", 120),
-		RateLimitWindow: envDuration("GOPENID_RATE_LIMIT_WINDOW", time.Minute),
-		CleanupInterval: envDuration("GOPENID_CLEANUP_INTERVAL", 15*time.Minute),
+		RateLimitMax:     envInt("GOPENID_RATE_LIMIT_MAX", 120),
+		RateLimitWindow:  envDuration("GOPENID_RATE_LIMIT_WINDOW", time.Minute),
+		CleanupInterval:  envDuration("GOPENID_CLEANUP_INTERVAL", 15*time.Minute),
+		MaxLoginFailures: envInt("GOPENID_MAX_LOGIN_FAILURES", 5),
+		LoginLockout:     envDuration("GOPENID_LOGIN_LOCKOUT", 15*time.Minute),
+		WebhookURL:       env("GOPENID_WEBHOOK_URL", ""),
 	}
 }
 

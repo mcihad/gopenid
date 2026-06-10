@@ -14,6 +14,7 @@ export function DashboardPage() {
     const clients = useQuery({ queryKey: ['clients'], queryFn: api.clients.list })
     const policies = useQuery({ queryKey: ['policies'], queryFn: api.policies.list })
     const audit = useQuery({ queryKey: ['audit', ''], queryFn: () => api.auditLogs({ limit: 8 }) })
+    const auditItems = audit.data?.items ?? []
 
     const activeUsers = users.data?.filter((user) => user.active && !user.blocked).length ?? 0
     const blockedUsers = users.data?.filter((user) => user.blocked).length ?? 0
@@ -42,9 +43,9 @@ export function DashboardPage() {
             <div className="dashboard-grid">
                 <article className="dashboard-card">
                     <header><FileClock size={16} /><h3>Son denetim olayları</h3><Link to="/audit" className="card-link">Tümünü gör</Link></header>
-                    {audit.data?.length ? (
+                    {auditItems.length ? (
                         <ul className="event-list">
-                            {audit.data.map((log) => (
+                            {auditItems.map((log) => (
                                 <li key={log.ID}>
                                     <span className={`event-dot ${log.success ? 'ok' : 'fail'}`} />
                                     <div>

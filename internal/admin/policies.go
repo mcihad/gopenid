@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"strconv"
 
 	"gopenid/internal/domain"
@@ -11,7 +10,7 @@ import (
 )
 
 func (h *Handler) listPolicies(c fiber.Ctx) error {
-	rows, err := h.db.ListPolicies(context.Background())
+	rows, err := h.db.ListPolicies(c.Context())
 	if err != nil {
 		return httpx.Error(c, 500, "list failed")
 	}
@@ -26,7 +25,7 @@ func (h *Handler) createPolicy(c fiber.Ctx) error {
 	if msg, ok := req.validate(); !ok {
 		return httpx.BadRequest(c, msg)
 	}
-	row, err := h.db.CreatePolicy(context.Background(), req.toPolicy())
+	row, err := h.db.CreatePolicy(c.Context(), req.toPolicy())
 	if err != nil {
 		return httpx.BadRequest(c, "policy already exists or invalid")
 	}
@@ -34,7 +33,7 @@ func (h *Handler) createPolicy(c fiber.Ctx) error {
 }
 
 func (h *Handler) getPolicy(c fiber.Ctx) error {
-	row, err := h.db.GetPolicy(context.Background(), idParam(c))
+	row, err := h.db.GetPolicy(c.Context(), idParam(c))
 	if err != nil {
 		return httpx.NotFound(c)
 	}
@@ -49,7 +48,7 @@ func (h *Handler) updatePolicy(c fiber.Ctx) error {
 	if msg, ok := req.validate(); !ok {
 		return httpx.BadRequest(c, msg)
 	}
-	row, err := h.db.UpdatePolicy(context.Background(), idParam(c), req.toPolicy())
+	row, err := h.db.UpdatePolicy(c.Context(), idParam(c), req.toPolicy())
 	if err != nil {
 		return httpx.BadRequest(c, "policy already exists or invalid")
 	}
@@ -57,14 +56,14 @@ func (h *Handler) updatePolicy(c fiber.Ctx) error {
 }
 
 func (h *Handler) deletePolicy(c fiber.Ctx) error {
-	if err := h.db.DeletePolicy(context.Background(), idParam(c)); err != nil {
+	if err := h.db.DeletePolicy(c.Context(), idParam(c)); err != nil {
 		return httpx.Error(c, 500, "delete failed")
 	}
 	return c.SendStatus(204)
 }
 
 func (h *Handler) listPolicyAssignments(c fiber.Ctx) error {
-	rows, err := h.db.ListPolicyAssignments(context.Background(), idParam(c))
+	rows, err := h.db.ListPolicyAssignments(c.Context(), idParam(c))
 	if err != nil {
 		return httpx.Error(c, 500, "list failed")
 	}
@@ -85,7 +84,7 @@ func (h *Handler) assignPolicy(c fiber.Ctx) error {
 	default:
 		return httpx.BadRequest(c, "subjectType must be client, group or user")
 	}
-	row, err := h.db.AssignPolicy(context.Background(), idParam(c), subject, req.SubjectID)
+	row, err := h.db.AssignPolicy(c.Context(), idParam(c), subject, req.SubjectID)
 	if err != nil {
 		return httpx.BadRequest(c, "assignment failed")
 	}
@@ -94,7 +93,7 @@ func (h *Handler) assignPolicy(c fiber.Ctx) error {
 
 func (h *Handler) unassignPolicy(c fiber.Ctx) error {
 	assignmentID, _ := strconv.ParseInt(c.Params("assignmentId"), 10, 64)
-	if err := h.db.UnassignPolicy(context.Background(), assignmentID); err != nil {
+	if err := h.db.UnassignPolicy(c.Context(), assignmentID); err != nil {
 		return httpx.Error(c, 500, "unassign failed")
 	}
 	return c.SendStatus(204)
